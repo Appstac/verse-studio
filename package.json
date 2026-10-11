@@ -1,0 +1,12 @@
+{
+  "name": "verse-studio",
+  "private": true,
+  "version": "0.1.0",
+  "workspaces": ["apps/web", "apps/worker"],
+  "scripts": {
+    "web": "npm run dev -w apps/web",
+    "worker": "npm start -w apps/worker",
+    "login": "npm run login -w apps/worker",
+    "doctor": "npm run doctor -w apps/worker"
+  }
+}
