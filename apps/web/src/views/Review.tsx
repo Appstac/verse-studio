@@ -213,7 +213,7 @@ function ChangePanel({ job, o, spec, onDone }: { job: Job; o: OutputItem; spec: 
             <div className="field">
               <span>Look</span>
               <div className="chips">
-                {PRESETS.filter((p) => source === "verse" || p !== "photo").map((p) => (
+                {PRESETS.filter((p) => source === "verse" || (p !== "photo" && p !== "footage")).map((p) => (
                   <button key={p} type="button" className={`chip ${preset === p ? "on" : ""}`} aria-pressed={preset === p} onClick={() => setPreset(preset === p ? "" : p)}>
                     {PRESET_INFO[p].label}
                   </button>

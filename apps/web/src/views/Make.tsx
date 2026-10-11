@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState } from "react";
-import { PRESETS, type Language, type Preset } from "@shared/schema";
+import { PRESETS, type Language, type Preset, MEDIA_PRESETS } from "@shared/schema";
 import { useApp } from "../App";
 import * as g from "../google";
 import { queueJob } from "../studio";
@@ -13,6 +13,7 @@ export const PRESET_INFO: Record<Preset, { label: string; swatch: string }> = {
   minimal: { label: "Bold", swatch: "#0A0A0B" },
   garden: { label: "Garden", swatch: "linear-gradient(165deg,#0e2416,#7f9c5e)" },
   photo: { label: "My backgrounds", swatch: "repeating-linear-gradient(45deg,#bbb 0 6px,#999 6px 12px)" },
+  footage: { label: "Stock footage", swatch: "linear-gradient(135deg,#5b8fb9,#d9a066)" },
 };
 
 function Seg<T extends string>({ value, options, onChange, label }: { value: T; options: Array<[T, string]>; onChange: (v: T) => void; label: string }) {
@@ -33,7 +34,7 @@ function StylePicker({ value, onChange, allowPhoto }: { value: Preset | "auto"; 
       <button type="button" className="btn small" aria-pressed={value === "auto"} style={value === "auto" ? { borderColor: "var(--ink)" } : undefined} onClick={() => onChange("auto")}>
         Let Claude choose
       </button>
-      {PRESETS.filter((p) => allowPhoto || p !== "photo").map((p) => (
+      {PRESETS.filter((p) => allowPhoto || !MEDIA_PRESETS.includes(p)).map((p) => (
         <button
           key={p}
           type="button"
@@ -283,7 +284,7 @@ function VerseForm() {
       <div className="field">
         <span>Look</span>
         <StylePicker value={preset} onChange={setPreset} allowPhoto />
-        <small>“My backgrounds” uses the photos and clips in Library.</small>
+        <small>“My backgrounds” uses the photos and clips in Library. “Stock footage” finds a free matching video on Pixabay.</small>
       </div>
       <label className="field">
         <span>Specific verses (optional)</span>

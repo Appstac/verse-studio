@@ -1,7 +1,8 @@
 import fs from "node:fs";
 import path from "node:path";
 import type { z } from "zod";
-import { type Job, type OutputItem, type ReviseChanges, type Settings, PRESETS } from "../../../shared/schema";
+import { type Job, type OutputItem, type ReviseChanges, type Settings, MEDIA_PRESETS, PRESETS } from "../../../shared/schema";
+import { findFootage, footageById, pixabayEnabled } from "./pixabay";
 import { FPS, TRANSITION_FRAMES, type BrandProps, type CaptionWord, type ClipEditProps, type ClipSegment, type PresetName, type VerseReelProps } from "../remotion/types";
 import { TRANSLATION_LABEL } from "./bible";
 import { mount, startFileServer, unmount } from "./fileserver";
@@ -67,6 +68,7 @@ export interface VerseSpec {
   preset: PresetName;
   backgroundFileId?: string;
   backgroundName?: string;
+  pixabayId?: number;
   speed: number; // 1 = normal reveal
   needsReview: boolean;
   reviewNote?: string;
@@ -274,7 +276,9 @@ export async function runVerseJob(ctx: Ctx) {
     const recent = history.used.filter((u) => Date.parse(u.date) > cutoff).map((u) => u.ref);
     const presets = req.preset === "auto" ? (ctx.job.source === "auto" ? s.auto.presets : PRESETS.filter((p) => p !== "photo")) : [req.preset];
     const backgrounds = await ctx.store.listBackgrounds();
-    const allowed = [...new Set([...presets, ...(backgrounds.length && req.preset === "auto" ? ["photo"] : [])])];
+    const allowed = [...new Set([...presets, ...(backgrounds.length && req.preset === "auto" ? ["photo"] : [])])].filter(
+      (p) => p !== "footage" || pixabayEnabled(),
+    );
 
     await ctx.update({ stage: "Writing hooks, picking verses and captions with Claude", progress: 0.05 });
     const plan = await ctx.ai.plan(
@@ -356,7 +360,13 @@ async function resolveVerse(
       backgroundName = pick.name;
     } else preset = "night";
   }
-  return { source: "verse", item: it, text, displayRef, preset, backgroundFileId, backgroundName, speed: 1, needsReview, reviewNote };
+  let pixabayId: number | undefined;
+  if (preset === "footage") {
+    const f = pixabayEnabled() ? await findFootage(it.footageQuery || it.mood) : null;
+    if (f) pixabayId = f.id;
+    else preset = "night";
+  }
+  return { source: "verse", item: it, text, displayRef, preset, backgroundFileId, backgroundName, pixabayId, speed: 1, needsReview, reviewNote };
 }
 
 async function verseProps(ctx: Ctx, spec: VerseSpec, brand: BrandProps, url: (f: string) => string): Promise<VerseReelProps> {
@@ -376,6 +386,16 @@ async function verseProps(ctx: Ctx, spec: VerseSpec, brand: BrandProps, url: (f:
         const info = await probe(norm);
         background = { type: "video", src: url(norm), durationSeconds: info.duration };
       }
+    } else preset = "night";
+  }
+  if (preset === "footage") {
+    const local = spec.pixabayId ? await footageById(spec.pixabayId) : null;
+    if (local) {
+      const dest = path.join(ctx.work, "bg", `pixabay-${spec.pixabayId}.mp4`);
+      fs.mkdirSync(path.dirname(dest), { recursive: true });
+      if (!fs.existsSync(dest)) await normalizeVideo(local, dest);
+      const info = await probe(dest);
+      background = { type: "video", src: url(dest), durationSeconds: info.duration };
     } else preset = "night";
   }
   const it = spec.item;
@@ -448,7 +468,7 @@ export async function runCarouselJob(ctx: Ctx) {
   try {
     const history = await ctx.store.readState<{ used: Array<{ ref: string; date: string }> }>("history", { used: [] });
     await ctx.update({ stage: "Writing the carousel with Claude", progress: 0.1 });
-    const presets = req.preset === "auto" ? s.auto.presets.filter((p) => p !== "photo") : [req.preset];
+    const presets = req.preset === "auto" ? s.auto.presets.filter((p) => !MEDIA_PRESETS.includes(p)) : [req.preset];
     const plan = await ctx.ai.plan(
       "carousel",
       carouselPrompt({ s, topic: req.topic, slides: req.slides, language: req.language, presets, recent: history.used.map((u) => u.ref) }),
@@ -692,7 +712,7 @@ export async function runEditJob(ctx: Ctx) {
     if (req.alsoCarousel) {
       // Same message, second format: a carousel built from what was said.
       await ctx.update({ stage: "Turning the video into a carousel", progress: 0.93, outputs: [...outputs] });
-      const presets = ctx.settings.auto.presets.filter((p) => p !== "photo");
+      const presets = ctx.settings.auto.presets.filter((p) => !MEDIA_PRESETS.includes(p));
       const said = clips.map((c) => c.transcript?.text ?? "").join(" ").slice(0, 4000);
       const cplan = await ctx.ai.plan(
         "carousel",
@@ -926,6 +946,12 @@ export async function runReviseJob(ctx: Ctx) {
             spec.backgroundName = pick.name;
             spec.preset = "photo";
           }
+        } else if (ch.preset === "footage") {
+          const f = pixabayEnabled() ? await findFootage(spec.item.footageQuery || spec.item.mood, spec.pixabayId ? [spec.pixabayId] : []) : null;
+          if (f) {
+            spec.pixabayId = f.id;
+            spec.preset = "footage";
+          }
         } else spec.preset = ch.preset;
       }
       if (ch.speed) spec.speed = (spec.speed || 1) * SPEED_FACTOR[ch.speed];
@@ -939,7 +965,7 @@ export async function runReviseJob(ctx: Ctx) {
       const spec: CarouselSpec = { ...(raw as CarouselSpec), plan: { ...(raw as CarouselSpec).plan } };
       if (instruction) {
         await ctx.update({ stage: "Claude is applying your change", progress: 0.1 });
-        const presets = s.auto.presets.filter((p) => p !== "photo");
+        const presets = s.auto.presets.filter((p) => !MEDIA_PRESETS.includes(p));
         const plan = await ctx.ai.plan(
           "revise",
           carouselRevisionPrompt({ s, previous: spec.plan, instruction, presets: presets.length ? presets : ["paper"] }),
@@ -952,7 +978,7 @@ export async function runReviseJob(ctx: Ctx) {
       if (ch.slides?.length) {
         spec.slides = spec.slides.map((sl, i) => (ch.slides![i] ? { ...sl, title: ch.slides![i].title, body: ch.slides![i].body || undefined } : sl));
       }
-      if (ch.preset && ch.preset !== "photo") spec.preset = ch.preset;
+      if (ch.preset && !MEDIA_PRESETS.includes(ch.preset)) spec.preset = ch.preset;
       if (ch.caption !== undefined) spec.plan = { ...spec.plan, caption: ch.caption };
       return [await renderCarouselSpec(ctx, spec, await brandProps(ctx, url), folderId, lineage)];
     }

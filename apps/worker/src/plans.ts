@@ -12,6 +12,7 @@ export const VerseItem = z.object({
   emphasis: z.array(z.string()).describe("1-3 single words from the verse text to highlight"),
   mood: z.enum(MOODS),
   preset: z.enum(PRESETS),
+  footageQuery: z.string().describe('2-4 English words for a calm stock background video matching the verse, e.g. "sunrise ocean", "candle light", "wheat field wind", "rain window". Used by the footage look.'),
   title: z.string().describe("Short internal title, 2-5 words, English"),
   caption: z.string().describe("Instagram caption, 2-4 short lines, warm and personal, ending with the call to action. No hashtags here."),
   hashtags: z.array(z.string()),
@@ -127,7 +128,7 @@ Rules:
 - ${lang}
 - For Telugu items: write the hook and caption in natural Telugu (a few English words are fine), give the verse in Telugu in "teluguText" and the Telugu-script reference in "teluguReference". "reference" stays in English (e.g. "John 14:27").
 - emphasis: pick 1-3 words that appear exactly in the verse text that will be shown (Telugu words for Telugu items).
-- preset is the visual style. Choose only from: ${opts.presets.join(", ")}. Vary them across items. Match the mood (night for comfort and peace, dawn for hope, paper for wisdom, minimal for bold declarations, garden for growth and rest).
+- preset is the visual style. Choose only from: ${opts.presets.join(", ")}. Vary them across items. Match the mood (night for comfort and peace, dawn for hope, paper for wisdom, minimal for bold declarations, garden for growth and rest, footage for a real stock video behind the verse, photo for her own background clips).
 - mood picks the background music.
 ${opts.theme ? `- Theme for this batch: ${opts.theme}` : `- Themes to rotate through: ${s.auto.themes.join("; ")}`}
 ${opts.references.length ? `- Use exactly these references, in order: ${opts.references.join("; ")}` : ""}

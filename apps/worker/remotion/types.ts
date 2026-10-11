@@ -1,7 +1,7 @@
 // Props passed from the worker into the Remotion compositions.
 // Kept free of zod so the Remotion bundle stays small.
 
-export type PresetName = "dawn" | "night" | "paper" | "minimal" | "garden" | "photo";
+export type PresetName = "dawn" | "night" | "paper" | "minimal" | "garden" | "photo" | "footage";
 export type Lang = "english" | "telugu";
 
 export type BrandProps = {

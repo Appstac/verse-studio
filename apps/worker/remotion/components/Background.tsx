@@ -147,7 +147,7 @@ export const Background: React.FC<{ preset: PresetName; seed: number; media?: Me
   const { durationInFrames } = useVideoConfig();
   const t = durationInFrames > 1 ? frame / durationInFrames : 0.5;
 
-  if (preset === "photo" && media) {
+  if ((preset === "photo" || preset === "footage") && media) {
     return (
       <AbsoluteFill style={{ background: "#000" }}>
         <MediaBg media={media} />

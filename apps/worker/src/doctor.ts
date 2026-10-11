@@ -53,6 +53,16 @@ async function main() {
     bad("Bible text service not reachable (English verses will fall back to Claude and be marked for review)");
   }
 
+  if (process.env.PIXABAY_API_KEY) {
+    try {
+      const r = await fetch(`https://pixabay.com/api/videos/?key=${process.env.PIXABAY_API_KEY}&q=sunrise&per_page=3`);
+      if (r.ok) ok("Pixabay stock footage key works");
+      else bad(`Pixabay returned ${r.status}: check PIXABAY_API_KEY (the Stock footage look will fall back to Night sky)`);
+    } catch {
+      bad("Pixabay not reachable (the Stock footage look will fall back to Night sky)");
+    }
+  } else console.log("  · Stock footage look is off (no PIXABAY_API_KEY in apps/worker/.env)");
+
   console.log(failures ? `\n${failures} problem(s) to fix. See docs/SETUP.md.\n` : "\nAll good. Start the worker with: npm run worker\n");
   process.exit(failures ? 1 : 0);
 }

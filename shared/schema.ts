@@ -9,7 +9,9 @@ import { z } from "zod";
 export const ROOT_FOLDER_NAME = "Verse Studio";
 export const APP_MARKER = "verse-studio";
 
-export const PRESETS = ["dawn", "night", "paper", "minimal", "garden", "photo"] as const;
+export const PRESETS = ["dawn", "night", "paper", "minimal", "garden", "photo", "footage"] as const;
+// Looks that need a photo or video behind the text (verse reels only).
+export const MEDIA_PRESETS: readonly string[] = ["photo", "footage"];
 export const Preset = z.enum(PRESETS);
 export type Preset = z.infer<typeof Preset>;
 
