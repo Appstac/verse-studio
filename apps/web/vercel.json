@@ -1,11 +1,21 @@
 {
   "buildCommand": "npm run build",
   "outputDirectory": "dist",
-  "installCommand": "npm install",
+  "installCommand": "cd ../.. && npm install -w apps/web --ignore-scripts --no-audit --no-fund",
   "headers": [
-    { "source": "/(.*)", "headers": [
-      { "key": "Cross-Origin-Opener-Policy", "value": "same-origin-allow-popups" },
-      { "key": "Referrer-Policy", "value": "strict-origin-when-cross-origin" }
-    ] }
-  ]
+    {
+      "source": "/(.*)",
+      "headers": [
+        {
+          "key": "Cross-Origin-Opener-Policy",
+          "value": "same-origin-allow-popups"
+        },
+        {
+          "key": "Referrer-Policy",
+          "value": "strict-origin-when-cross-origin"
+        }
+      ]
+    }
+  ],
+  "framework": "vite"
 }
