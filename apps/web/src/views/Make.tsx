@@ -1,8 +1,9 @@
 import React, { useEffect, useRef, useState } from "react";
-import { PRESETS, type Language, type Preset, MEDIA_PRESETS } from "@shared/schema";
+import { PRESETS, brandingFromSettings, captionChoiceFromSettings, type EditType, type Language, type Preset, MEDIA_PRESETS } from "@shared/schema";
 import { useApp } from "../App";
 import * as g from "../google";
 import { queueJob } from "../studio";
+import { BrandingEditor, CaptionEditor, useLogoUrl } from "./StyleEditors";
 
 type Mode = "edit" | "verse" | "carousel";
 
@@ -57,6 +58,65 @@ interface Upload {
   progress: number;
   fileId?: string;
   error?: string;
+  /** Local preview of the file (never uploaded twice). */
+  url?: string;
+  isVideo?: boolean;
+  duration?: number;
+  start?: number;
+  end?: number;
+}
+
+const fmt = (t: number) => `${Math.floor(t / 60)}:${String(Math.floor(t % 60)).padStart(2, "0")}${t % 1 >= 0.05 ? `.${Math.floor((t % 1) * 10)}` : ""}`;
+
+// Watch a clip and mark the part to use. Only that part is sent to the editor.
+function TrimPanel({ u, onChange }: { u: Upload; onChange: (p: Partial<Upload>) => void }) {
+  const video = useRef<HTMLVideoElement>(null);
+  const [failed, setFailed] = useState(false);
+  const dur = u.duration ?? 0;
+  const start = u.start ?? 0;
+  const end = u.end ?? dur;
+  return (
+    <div className="trim">
+      {!failed ? (
+        <video
+          ref={video}
+          src={u.url}
+          controls
+          playsInline
+          preload="metadata"
+          onLoadedMetadata={(e) => onChange({ duration: e.currentTarget.duration })}
+          onError={() => setFailed(true)}
+          onTimeUpdate={(e) => {
+            // Preview loops inside the chosen part.
+            if (u.end && e.currentTarget.currentTime > u.end) e.currentTarget.currentTime = u.start ?? 0;
+          }}
+        />
+      ) : (
+        <p className="hint">This browser can't preview this video format, but you can still type the times below.</p>
+      )}
+      <div className="row" style={{ flexWrap: "wrap" }}>
+        <button type="button" className="btn small" disabled={failed} onClick={() => video.current && onChange({ start: Math.min(video.current.currentTime, end - 0.5) })}>
+          Start here
+        </button>
+        <button type="button" className="btn small" disabled={failed} onClick={() => video.current && onChange({ end: Math.max(video.current.currentTime, start + 0.5) })}>
+          End here
+        </button>
+        <label className="row hint">
+          From
+          <input type="number" min={0} step={0.1} value={Number(start.toFixed(1))} style={{ width: 80 }} onChange={(e) => onChange({ start: Math.max(0, Number(e.target.value) || 0) })} />
+          to
+          <input type="number" min={0} step={0.1} value={Number(end.toFixed(1))} style={{ width: 80 }} onChange={(e) => onChange({ end: Math.max(0, Number(e.target.value) || 0) })} />
+          s
+        </label>
+        <button type="button" className="btn quiet small" onClick={() => onChange({ start: undefined, end: undefined })}>
+          Use whole clip
+        </button>
+      </div>
+      <small className="hint">
+        {u.start !== undefined || u.end !== undefined ? `Using ${fmt(start)} to ${fmt(end)} (${(end - start).toFixed(1)}s)` : `Using the whole clip${dur ? ` (${fmt(dur)})` : ""}`}. Claude picks the best moments inside this part.
+      </small>
+    </div>
+  );
 }
 
 function Uploader({ uploads, setUploads }: { uploads: Upload[]; setUploads: React.Dispatch<React.SetStateAction<Upload[]>> }) {
@@ -68,7 +128,8 @@ function Uploader({ uploads, setUploads }: { uploads: Upload[]; setUploads: Reac
     if (!files) return;
     for (const file of Array.from(files)) {
       const key = `${file.name}-${file.size}-${Math.random()}`;
-      setUploads((u) => [...u, { key, name: file.name, progress: 0 }]);
+      const isVideo = file.type.startsWith("video/") || /\.(mov|mp4|m4v|webm|3gp)$/i.test(file.name);
+      setUploads((u) => [...u, { key, name: file.name, progress: 0, isVideo, url: isVideo ? URL.createObjectURL(file) : undefined }]);
       g.uploadFile(file, studio.folders.Uploads, (p) => setUploads((u) => u.map((x) => (x.key === key ? { ...x, progress: p } : x))))
         .then((id) => setUploads((u) => u.map((x) => (x.key === key ? { ...x, progress: 1, fileId: id } : x))))
         .catch((e) => setUploads((u) => u.map((x) => (x.key === key ? { ...x, error: e.message } : x))));
@@ -117,6 +178,14 @@ function Uploader({ uploads, setUploads }: { uploads: Upload[]; setUploads: Reac
                 </div>
               ) : null}
               {u.error ? <small style={{ gridColumn: "1 / -1", color: "var(--rose)" }}>{u.error}</small> : null}
+              {u.isVideo && u.url ? (
+                <details className="trimwrap" style={{ gridColumn: "1 / -1" }}>
+                  <summary className="hint">
+                    Preview and trim{u.start !== undefined || u.end !== undefined ? ` · ${fmt(u.start ?? 0)}–${fmt(u.end ?? u.duration ?? 0)}` : ""}
+                  </summary>
+                  <TrimPanel u={u} onChange={(p) => setUploads((x) => x.map((y) => (y.key === u.key ? { ...y, ...p } : y)))} />
+                </details>
+              ) : null}
             </div>
           ))}
         </div>
@@ -124,6 +193,14 @@ function Uploader({ uploads, setUploads }: { uploads: Upload[]; setUploads: Reac
     </div>
   );
 }
+
+const EDIT_TYPE_HINT: Record<EditType, string> = {
+  auto: "Claude looks and listens, then picks the right style.",
+  worship: "Keeps whole sung lines, no jump cuts, gentle moves, lyrics on screen, no extra music over the singing.",
+  talking: "Keeps the best take, cuts pauses and retakes, big pop-up captions, punch-in zooms.",
+  sermon: "Finds the strongest 1-3 points, cuts cleanly between thoughts, clear captions, calm pacing.",
+  montage: "Short varied shots cut to the music, with the best moments first.",
+};
 
 function EditForm() {
   const { studio, toast, go, refresh } = useApp();
@@ -135,8 +212,23 @@ function EditForm() {
   const [capLang, setCapLang] = useState<"auto" | "en" | "te">("auto");
   const [keepAudio, setKeepAudio] = useState(true);
   const [alsoCarousel, setAlsoCarousel] = useState(false);
+  const [editType, setEditType] = useState<EditType>("auto");
+  const [lyrics, setLyrics] = useState("");
+  const [songTitle, setSongTitle] = useState("");
+  const [singer, setSinger] = useState("");
+  const [focus, setFocus] = useState("");
+  const [stabilize, setStabilize] = useState<"auto" | "on" | "off">("auto");
+  const [cleanAudio, setCleanAudio] = useState(true);
+  const [autoColor, setAutoColor] = useState(true);
+  const [qualityCheck, setQualityCheck] = useState(false);
+  const [extraLengths, setExtraLengths] = useState<number[]>([]);
+  const [hookOptions, setHookOptions] = useState<1 | 2 | 3>(1);
+  const [branding, setBranding] = useState(() => brandingFromSettings(studio.settings));
+  const [captionChoice, setCaptionChoice] = useState(() => captionChoiceFromSettings(studio.settings));
+  const logoUrl = useLogoUrl(studio.settings.brand.logoFileId);
   const [busy, setBusy] = useState(false);
   const ready = uploads.filter((u) => u.fileId);
+  const song = editType === "worship" || editType === "auto";
   const uploading = uploads.some((u) => !u.fileId && !u.error);
 
   return (
@@ -157,6 +249,22 @@ function EditForm() {
             captionLanguage: capLang,
             keepOriginalAudio: keepAudio,
             alsoCarousel,
+            editType,
+            lyrics: song ? lyrics.trim() : "",
+            songTitle: song ? songTitle.trim() : "",
+            singer: song ? singer.trim() : "",
+            focus: focus.trim(),
+            stabilize,
+            cleanAudio,
+            autoColor,
+            qualityCheck,
+            ranges: ready
+              .map((u, index) => ({ index, start: u.start ?? 0, end: u.end ?? u.duration ?? 99999 }))
+              .filter((r, i) => (ready[i].start !== undefined || ready[i].end !== undefined) && r.end > r.start + 0.5),
+            extraLengths: extraLengths.filter((l) => Math.abs(l - seconds) >= 3),
+            hookOptions,
+            branding,
+            captionChoice,
           });
           toast("Queued. It will appear under Reels when it's ready.");
           void refresh();
@@ -181,6 +289,45 @@ function EditForm() {
           cuts the pauses, adds big captions and punch-in zooms. Add photos or screenshots and it floats them in as cards where they fit.
         </small>
       </label>
+      <div className="field">
+        <span>What kind of video is it?</span>
+        <Seg
+          value={editType}
+          onChange={setEditType}
+          label="Kind of video"
+          options={[["auto", "Let Claude tell"], ["worship", "Worship song"], ["talking", "Talking / testimony"], ["sermon", "Sermon clip"], ["montage", "Event montage"]]}
+        />
+        <small>{EDIT_TYPE_HINT[editType]}</small>
+      </div>
+      {song ? (
+        <details className="subpanel" open={editType === "worship"}>
+          <summary>Song details (optional, makes song reels much better)</summary>
+          <div className="grid2">
+            <label className="field">
+              <span>Song title</span>
+              <input type="text" value={songTitle} onChange={(e) => setSongTitle(e.target.value)} placeholder="e.g. Yesu Raja" />
+            </label>
+            <label className="field">
+              <span>Sung by</span>
+              <input type="text" value={singer} onChange={(e) => setSinger(e.target.value)} placeholder="e.g. Sis. Mary, Grace Church choir" />
+            </label>
+          </div>
+          <label className="field">
+            <span>Lyrics</span>
+            <textarea
+              value={lyrics}
+              onChange={(e) => setLyrics(e.target.value)}
+              placeholder={"Paste the lyrics, one line per line, in Telugu or English.\nThey're shown line by line in time with the singing, instead of guessing words from the audio."}
+              style={{ minHeight: 140 }}
+            />
+          </label>
+        </details>
+      ) : null}
+      <label className="field">
+        <span>Who should stay in frame? (optional)</span>
+        <input type="text" value={focus} onChange={(e) => setFocus(e.target.value)} placeholder="e.g. the woman in beige singing at the podium" />
+        <small>The edit crops and slowly moves toward this person, and away from heads and phones in front of the camera.</small>
+      </label>
       <label className="field">
         <span>Length: about {seconds} seconds</span>
         <input type="range" min={8} max={90} step={1} value={seconds} onChange={(e) => setSeconds(Number(e.target.value))} />
@@ -202,9 +349,79 @@ function EditForm() {
         <span>
           Keep the original sound (singing, speech)
           <br />
-          <small className="hint">Music versions are mixed quietly underneath it.</small>
+          <small className="hint">Music versions are mixed quietly underneath speech. For songs, no music is added on top of the singing.</small>
         </span>
       </label>
+      <details className="subpanel">
+        <summary>More versions from the same upload{extraLengths.length || hookOptions > 1 ? ` · ${1 + extraLengths.length + hookOptions - 1} videos` : ""}</summary>
+        <div className="field">
+          <span>Also make these lengths</span>
+          <div className="chips">
+            {[15, 30, 45, 60].filter((l) => Math.abs(l - seconds) >= 3).map((l) => (
+              <button
+                key={l}
+                type="button"
+                className={`chip ${extraLengths.includes(l) ? "on" : ""}`}
+                aria-pressed={extraLengths.includes(l)}
+                onClick={() => setExtraLengths((x) => (x.includes(l) ? x.filter((y) => y !== l) : [...x, l].slice(-3)))}
+              >
+                {l}s
+              </button>
+            ))}
+          </div>
+          <small>Each length is planned separately, so the short one isn't just the long one cut off.</small>
+        </div>
+        <div className="field">
+          <span>Opening hook options</span>
+          <Seg value={String(hookOptions) as "1" | "2" | "3"} onChange={(v) => setHookOptions(Number(v) as 1 | 2 | 3)} label="Hook options" options={[["1", "One"], ["2", "Two"], ["3", "Three"]]} />
+          <small>Get the main reel with 2 or 3 different opening lines, to test which one people stop for.</small>
+        </div>
+      </details>
+      <details className="subpanel">
+        <summary>Watermark and end card for this video</summary>
+        <BrandingEditor value={branding} onChange={setBranding} handle={studio.settings.brand.handle} logo={logoUrl} />
+        <button type="button" className="btn quiet small" onClick={() => setBranding(brandingFromSettings(studio.settings))}>
+          Reset to my defaults
+        </button>
+      </details>
+      <details className="subpanel">
+        <summary>Text style for this video</summary>
+        <CaptionEditor value={captionChoice} onChange={setCaptionChoice} accent={studio.settings.brand.accentColor} />
+        <button type="button" className="btn quiet small" onClick={() => setCaptionChoice(captionChoiceFromSettings(studio.settings))}>
+          Reset to my defaults
+        </button>
+      </details>
+      <details className="subpanel">
+        <summary>Picture and sound fixes</summary>
+        <label className="check">
+          <input type="checkbox" checked={autoColor} onChange={(e) => setAutoColor(e.target.checked)} />
+          <span>
+            Fix light and colour
+            <br />
+            <small className="hint">Brightens dark rooms, tames blown-out walls, warms up cold skin tones.</small>
+          </span>
+        </label>
+        <div className="field">
+          <span>Steady shaky video</span>
+          <Seg value={stabilize} onChange={setStabilize} label="Stabilize" options={[["auto", "When needed"], ["on", "Always"], ["off", "Never"]]} />
+        </div>
+        <label className="check">
+          <input type="checkbox" checked={cleanAudio} onChange={(e) => setCleanAudio(e.target.checked)} />
+          <span>
+            Clean up the sound
+            <br />
+            <small className="hint">Removes hum and hiss, makes voices clearer, evens out loud and quiet parts.</small>
+          </span>
+        </label>
+        <label className="check">
+          <input type="checkbox" checked={qualityCheck} onChange={(e) => setQualityCheck(e.target.checked)} />
+          <span>
+            Double-check the finished reel
+            <br />
+            <small className="hint">Claude watches the result and fixes problems once before you get it. Adds 2-4 minutes.</small>
+          </span>
+        </label>
+      </details>
       <label className="check">
         <input type="checkbox" checked={alsoCarousel} onChange={(e) => setAlsoCarousel(e.target.checked)} />
         <span>

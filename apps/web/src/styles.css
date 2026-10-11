@@ -215,3 +215,26 @@ input[type="range"] { width: 100%; accent-color: var(--gold); }
 .kvgrid > span { color: var(--muted); }
 .kvgrid > b { font-weight: 600; min-width: 0; overflow-wrap: anywhere; }
 @media (max-width: 480px) { .kvgrid { grid-template-columns: 1fr; gap: 2px; } .kvgrid > b { margin-bottom: 8px; } }
+
+/* Collapsible option groups in forms */
+.subpanel { border: 1px solid var(--line, rgba(0,0,0,0.12)); border-radius: var(--radius-s); padding: 12px 14px; display: grid; gap: 14px; }
+.subpanel > summary { cursor: pointer; font-weight: 600; list-style-position: inside; }
+.subpanel:not([open]) { gap: 0; }
+
+/* Style editors with phone previews */
+.editor-with-preview { display: grid; grid-template-columns: 1fr auto; gap: 20px; align-items: start; }
+@media (max-width: 640px) { .editor-with-preview { grid-template-columns: 1fr; } .editor-with-preview > .phone-preview { justify-self: center; } }
+.phone-preview { margin: 0; display: grid; gap: 6px; justify-items: center; position: sticky; top: 12px; }
+.phone-preview figcaption { font-size: 13px; color: var(--muted); }
+.phone { position: relative; border-radius: 14px; overflow: hidden; box-shadow: 0 6px 20px rgba(0,0,0,0.25); background: #222; }
+.phone-bg { position: absolute; inset: 0; background: linear-gradient(170deg, #b9a48c 0%, #6f5a4a 55%, #2d2420 100%); }
+.phone-bg.night { background: radial-gradient(ellipse at 50% 90%, #24305c, #070a18 70%); }
+.endcard-preview { position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 5px; padding: 0 12px; text-align: center; color: #fff; }
+.endcard-preview img { width: 30px; height: 30px; border-radius: 50%; object-fit: cover; }
+.endcard-preview b { font-family: 'Playfair Display', Georgia, serif; font-weight: 500; font-size: 13px; }
+.endcard-preview i { width: 34px; height: 1px; background: var(--gold); }
+.endcard-preview span { font-size: 8.5px; opacity: 0.85; line-height: 1.35; }
+.swatch-input { width: 64px; height: 40px; border: 0; padding: 0; background: none; }
+.chips { display: flex; flex-wrap: wrap; gap: 8px; }
+.trim { display: grid; gap: 8px; grid-column: 1 / -1; }
+.trim video { width: 100%; max-height: 360px; background: #000; border-radius: var(--radius-s); }

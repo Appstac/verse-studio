@@ -3,7 +3,7 @@
 // the rendering pipeline can be tested on any machine.
 import fs from "node:fs";
 import path from "node:path";
-import { newJobId, type Job } from "../../../shared/schema";
+import { EditRequest, newJobId, type Job } from "../../../shared/schema";
 import { Engine } from "./engine";
 import type { Planner } from "./jobs";
 import { ffmpeg } from "./media";
@@ -81,19 +81,30 @@ export const mock: Planner = {
         hashtags: ["#bestill", "#faith", "#jesuschrist", "#exodus1414", "#christian"],
       } as never;
     }
-    return {
+    const edit = {
       title: "Sunday worship",
       hook: "Sunday worship moments 🙌",
+      altHooks: ["Was this your Sunday too?"],
       segments: [
-        { clip: 0, start: 0.5, end: 3.5, zoom: "in", speed: 1, textOverlay: "" },
-        { clip: 1, start: 1, end: 4, zoom: "none", speed: 1, textOverlay: "" },
-        { clip: 0, start: 4, end: 6.5, zoom: "punch", speed: 1, textOverlay: "" },
+        { clip: 0, start: 0.5, end: 3.5, zoom: "in", focusX: 0.35, focusY: 0.4, focusEndX: 0.35, focusEndY: 0.4, crop: 1.3, speed: 1, textOverlay: "" },
+        { clip: 1, start: 1, end: 4, zoom: "pan", focusX: 0.3, focusY: 0.4, focusEndX: 0.7, focusEndY: 0.5, crop: 1.25, speed: 1, textOverlay: "" },
+        { clip: 0, start: 4, end: 6.5, zoom: "punch", focusX: 0.6, focusY: 0.3, focusEndX: 0.6, focusEndY: 0.3, crop: 1, speed: 1, textOverlay: "" },
       ],
       transition: "fade",
-      layout: "blur-pad",
-      style: "talking-head",
+      layout: "fill",
+      style: "worship",
       emphasis: ["lord", "worthy"],
-      overlays: [{ clip: 2, at: 2, duration: 2.5, position: "top" }],
+      overlays: [],
+      grades: [
+        { clip: 0, exposure: 0.25, contrast: 0.2, highlights: 0.6, saturation: 0.15, warmth: 0.35 },
+        { clip: 1, exposure: -0.1, contrast: 0.15, highlights: 0.3, saturation: 0, warmth: -0.2 },
+      ],
+      audioBed: { clip: 0, start: 0.5 },
+      lyricLines: [
+        { text: "We lift our hands to You", start: 0.6, end: 2.8 },
+        { text: "You are worthy of all praise", start: 3.0, end: 5.2 },
+        { text: "మీరే యోగ్యులు ప్రభువా", start: 5.4, end: 7.6 },
+      ],
       cta: "Type AMEN if you were blessed",
       captionLanguage: "english",
       showCaptions: true,
@@ -101,7 +112,12 @@ export const mock: Planner = {
       caption: "Grateful for every voice lifted in praise.\n\nType AMEN if you were blessed 🙏",
       hashtags: ["#worship", "#jesuschrist", "#faith", "#church", "#praise"],
       notes: "demo",
-    } as never;
+    };
+    if (kind === "review") {
+      // Pretend the check found the first shot too loose and tightened it.
+      return { verdict: "fix", problems: ["Opening shot too wide: singer small in frame"], plan: { ...edit, segments: edit.segments.map((sg, k) => (k === 0 ? { ...sg, crop: 1.5 } : sg)) } } as never;
+    }
+    return edit as never;
   },
   async verse(reference) {
     const known: Record<string, string> = {
@@ -136,7 +152,7 @@ async function main() {
     {
       ...base,
       id: newJobId(),
-      request: {
+      request: EditRequest.parse({
         type: "edit",
         inputFileIds: ["Uploads/clip-a.mp4", "Uploads/clip-b.mp4", "Uploads/photo.png"],
         inputNames: ["clip-a.mp4", "clip-b.mp4", "photo.png"],
@@ -146,8 +162,20 @@ async function main() {
         captions: true,
         captionLanguage: "auto",
         keepOriginalAudio: true,
-        alsoCarousel: true,
-      },
+        alsoCarousel: false,
+        editType: "worship",
+        songTitle: "Worthy of all praise",
+        singer: "Grace Church choir",
+        lyrics: "We lift our hands to You\nYou are worthy of all praise\nమీరే యోగ్యులు ప్రభువా",
+        hookOptions: 2,
+        qualityCheck: true,
+        stabilize: "auto",
+        branding: {
+          watermark: { enabled: true, text: "@tanishka.guduru", font: "handwritten", size: 48, position: "bottom-right", opacity: 0.9, style: "shadow", color: "#ffffff", showLogo: false },
+          endCard: { enabled: true, title: "Tanishka Guduru", text: "Follow for daily worship\nShare with someone who needs this", seconds: 2, showLogo: true, claudeWrites: false },
+        },
+        captionChoice: { style: "lyrics", look: { font: "elegant", color: "#ffffff", highlight: "", size: "medium", position: "lower", background: "shadow", uppercase: false } },
+      }),
     },
   ];
   const only = process.env.DEMO_ONLY;

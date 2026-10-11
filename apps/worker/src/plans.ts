@@ -24,13 +24,31 @@ export const EditSegment = z.object({
   clip: z.number().int().describe("0-based index of the source clip"),
   start: z.number().describe("start time in the source clip, seconds"),
   end: z.number().describe("end time in the source clip, seconds"),
-  zoom: z.enum(["none", "in", "out", "punch"]).describe('"punch" = static tighter framing, used to alternate on jump cuts'),
-  speed: z.number().describe("playback speed, 1 = normal, allowed 0.5 to 2"),
+  zoom: z
+    .enum(["none", "in", "out", "punch", "pan"])
+    .describe('"in" slow push-in, "out" slow pull-back, "punch" static tighter crop (alternate on jump cuts), "pan" slow move from focus to focusEnd'),
+  focusX: z.number().describe("Where the main person/subject is, 0 = left edge, 1 = right edge of the source frame. The crop keeps this point centred."),
+  focusY: z.number().describe("0 = top, 1 = bottom of the source frame. Use the face/upper body height (often 0.25-0.45)."),
+  focusEndX: z.number().describe('For zoom "pan": where to end; otherwise same as focusX'),
+  focusEndY: z.number().describe('For zoom "pan": where to end; otherwise same as focusY'),
+  crop: z
+    .number()
+    .describe("How tight to frame: 1 = just fill the 9:16 frame, 1.2-1.5 = tighter on the person (crops away heads/phones in front, empty walls). Max 1.8."),
+  speed: z.number().describe("playback speed, 1 = normal, allowed 0.5 to 2. Keep 1 when the sound of this segment is heard."),
   textOverlay: z.string().describe("Optional short on-screen text for this segment, else empty string"),
+});
+export const ClipGrade = z.object({
+  clip: z.number().int(),
+  exposure: z.number().describe("-1 darker ... 0 ... +1 brighter. Dark rooms +0.2 to +0.5; bright/blown-out -0.1 to -0.3"),
+  contrast: z.number().describe("-1 flatter ... +1 punchier. Phone video usually +0.1 to +0.3"),
+  highlights: z.number().describe("0-1: how much to recover blown-out whites (white curtains, windows, stage lights)"),
+  saturation: z.number().describe("-1 ... +1. Usually 0 to +0.25; never make skin orange"),
+  warmth: z.number().describe("-1 cooler ... +1 warmer. Cold/blue indoor light +0.2 to +0.4"),
 });
 export const EditPlan = z.object({
   title: z.string(),
-  hook: z.string().describe("On-screen opener for the first 2 seconds (max 8 words) or empty string"),
+  hook: z.string().describe("On-screen opener for the first 2 seconds (max 8 words, top third) or empty string"),
+  altHooks: z.array(z.string()).describe("Alternative hooks in different styles (see request). Empty if only one is needed."),
   segments: z.array(EditSegment).min(1),
   transition: z.enum(["cut", "fade"]),
   layout: z.enum(["fill", "blur-pad"]),
@@ -39,7 +57,7 @@ export const EditPlan = z.object({
   mood: z.enum(MOODS),
   caption: z.string(),
   hashtags: z.array(z.string()),
-  style: z.enum(["talking-head", "worship", "montage"]).describe("What kind of footage this mostly is"),
+  style: z.enum(["talking-head", "worship", "sermon", "montage"]).describe("What kind of footage this mostly is"),
   emphasis: z.array(z.string()).describe("3-10 single spoken words to pop in the accent script font (the emotional or key words)"),
   overlays: z
     .array(
@@ -51,6 +69,17 @@ export const EditPlan = z.object({
       }),
     )
     .describe("B-roll cards floating over the main footage. Empty if none fit."),
+  grades: z.array(ClipGrade).describe("Colour/light correction for every video clip used"),
+  audioBed: z
+    .object({ clip: z.number().int().describe("-1 for none"), start: z.number().describe("seconds in that clip where the continuous sound starts") })
+    .describe(
+      "Songs/worship: one continuous sound track taken from this clip, starting here and running for the whole edit, while the pictures may cut to other clips (crowd, hands raised, close-ups). clip -1 = each segment plays its own sound.",
+    ),
+  lyricLines: z
+    .array(z.object({ text: z.string(), start: z.number(), end: z.number() }))
+    .describe(
+      "Only when lyrics were provided: each lyric line that is sung inside the edit, with start/end in seconds of the SOUND source (the audioBed clip, or the clip of the segment being heard). Empty otherwise.",
+    ),
   cta: z.string().describe("Closing call-to-action line for the end card, max 6 words, or empty"),
   notes: z.string().describe("One or two sentences explaining the edit choices"),
 });
@@ -141,57 +170,109 @@ Recently used references (do not repeat): ${opts.recent.slice(-150).join("; ") |
 Return JSON with "items" (exactly ${opts.count}).`;
 }
 
+export interface EditClipInfo {
+  index: number;
+  name: string;
+  duration: number;
+  width: number;
+  height: number;
+  hasAudio: boolean;
+  isImage: boolean;
+  sheets: string[];
+  sheetStep: number;
+  transcript: string;
+  audio: string;
+  picture: string;
+}
+
+// Editing recipes, written from what works for church and worship accounts
+// (hooks in 1-3 s, one idea per clip, captions for muted viewing, emotional peaks first).
+const RECIPES: Record<string, string> = {
+  worship: `WORSHIP SONG recipe (style "worship"):
+  * Find the emotional peak: the chorus, the highest/most passionate line, a key change, hands raised, eyes closed, the congregation joining in. Use the loudness map: the loudest sustained stretch is usually the chorus.
+  * OPEN ON THE PEAK (or the line right before it), not on the intro, tuning, or the first quiet verse. The hook text names the feeling or moment ("When the whole church sang this 🙏", "This chorus every morning"), max 8 words.
+  * The SOUND must never jump: use an audioBed (one continuous stretch of the best-sounding clip) or, with a single clip, consecutive segments whose times touch (end of one = start of the next). Never cut inside a sung line; cut pictures on phrase ends (see "sound phrases").
+  * Pictures: long shots of 3-8 s. Alternate between a tight frame on the singer (crop 1.3-1.5, zoom "in") and a wider/different frame (crop 1.0-1.15 or "pan"). With other clips (crowd, hands, kids singing) use them as picture-only cutaways over the audioBed.
+  * Keep heads, phones and empty curtain out of frame with focus + crop. No whooshes, no pop-up captions, no jump-cut punches.
+  * Speed: keep 1 (sound is heard). The edit may end on a held note; finish on a complete line.
+  * Lyrics: if provided, show them line by line (lyricLines), timed to where each is sung. If not provided, showCaptions false unless the transcript is clearly correct lyrics.
+  * cta: gentle and participatory ("Sing this over your week 🙏", "Send this to someone who needs it").`,
+  talking: `TALKING / TESTIMONY recipe (style "talking-head"):
+  * Hook in the first 1-3 seconds with the most surprising, honest or emotional sentence, said cold with no setup. Patterns that work: confession ("I almost gave up on God that year"), contrast ("Prayer didn't change my situation. It changed me."), a question people are already asking, a specific promise ("3 verses that got me through").
+  * Remove every pause longer than ~0.35 s, ums, false starts and repeated takes; when a line is said several times keep the best (usually the LAST complete) take.
+  * Many short segments that follow the speech. Alternate zoom "none" and "punch" on consecutive segments from the same clip; use "in" on the most emotional line. Focus on the face (focusY ~0.3), crop 1.0-1.2.
+  * One idea per reel; land a short, repeatable closing line, then end right after it.
+  * Captions on (most people watch muted). Emphasis words carry the meaning.`,
+  sermon: `SERMON CLIP recipe (style "sermon"):
+  * Pick ONE thought: a contrast statement, a scripture reveal, a story turn, a quotable definition, or a challenge. Skip announcements, inside jokes, prayers, and anything needing context.
+  * Start at the turn, not the setup: the first 3 seconds must make sense with zero context. Hook text (max 8 words, top third) states the tension.
+  * Middle: one insight. End right after the landing line (the sentence people would quote or send), never mid-sentence. 15-45 s is ideal.
+  * Remove long pauses and false starts but keep the preacher's rhythm (fewer, longer segments than talking-head). Mild "in" pushes on key sentences, focus on the speaker, crop 1.1-1.4 to lose the pulpit clutter.
+  * Captions on; emphasis on scripture names and key words.`,
+  montage: `EVENT MONTAGE recipe (style "montage"):
+  * Best, most joyful/emotional moments first (faces, hugs, kids, raised hands, the group). 1.5-4 s shots with variety (wide, close, detail), never two similar shots in a row.
+  * If one clip has a song or strong sound, use it as audioBed and cut pictures on its phrase ends/beats; otherwise sound comes from the shots or the music versions.
+  * Use "pan", "in" and "out" for life; focus on people, crop away clutter. End on the group / the most memorable shot.
+  * Hook: name the occasion and feeling ("Christmas at Grace Church 🎄"). Captions only if someone speaks something meaningful.`,
+};
+
 export function editPrompt(opts: {
   s: Settings;
   userPrompt: string;
   targetSeconds: number;
-  clips: Array<{ index: number; name: string; duration: number; width: number; height: number; hasAudio: boolean; isImage: boolean; sheet: string; transcript: string }>;
+  clips: EditClipInfo[];
   layout: string;
   captions: boolean;
   captionLanguage: string;
+  editType: string;
+  lyrics: string;
+  songTitle: string;
+  singer: string;
+  focus: string;
+  hookOptions: number;
+  autoColor: boolean;
 }) {
   const { s } = opts;
   const clipText = opts.clips
     .map(
       (c) =>
-        `Clip ${c.index}: "${c.name}", ${c.isImage ? "PHOTO/SCREENSHOT" : `${c.duration.toFixed(1)}s video`}, ${c.width}x${c.height}, ${c.hasAudio ? "has audio" : "no audio"}.
-  Frames (3x3 grid, read left-to-right, top-to-bottom, evenly spaced through the clip): ${c.sheet}
-  Transcript with times: ${c.transcript || "(no speech detected)"}`,
+        `Clip ${c.index}: "${c.name}", ${c.isImage ? "PHOTO/SCREENSHOT" : `${c.duration.toFixed(1)}s video`}, ${c.width}x${c.height}, ${c.hasAudio ? "has sound" : "no sound"}.
+  Frame grids (4x3, left-to-right then top-to-bottom, one frame every ${c.sheetStep.toFixed(1)}s, timestamps printed on each frame): ${c.sheets.join(", ")}
+  ${c.picture ? `Picture: ${c.picture}` : ""}
+  ${c.audio ? `Sound: ${c.audio}` : ""}
+  Transcript with times: ${c.transcript || "(no clear speech detected)"}`,
     )
     .join("\n\n");
-  return `You are a professional short-form video editor making an Instagram Reel (9:16, 1080x1920) for a Christian account.
+  const type = opts.editType === "auto" ? "" : opts.editType;
+  const recipes = type ? RECIPES[type] : Object.values(RECIPES).join("\n\n");
+  return `You are an award-winning short-form video editor for church and Christian creators, making an Instagram Reel (9:16, 1080x1920). The goal: a reel people watch to the end, feel moved and encouraged by, save and send to a friend.
 
 ${voice(s)}
 
-The owner uploaded these clips. Look at every frame grid image with the Read tool before deciding.
+The owner uploaded these clips. Open EVERY frame grid image with the Read tool before deciding: you need to see who is where in the frame, what is in the foreground, and where the best moments are.
 
 ${clipText}
 
-Owner's request: ${opts.userPrompt || "Make the best possible reel from these clips."}
+Owner's request: ${opts.userPrompt || "Make the most engaging, encouraging reel possible from these clips."}
+${type ? `Kind of video (chosen by the owner): ${type}.` : "Decide which kind of video this is (style)."}
+${opts.focus ? `Keep this person/subject in frame: ${opts.focus}.` : ""}
+${opts.songTitle || opts.singer ? `Song: "${opts.songTitle || "untitled"}"${opts.singer ? ` sung by ${opts.singer}` : ""} (a title card is added automatically).` : ""}
+${opts.lyrics ? `Lyrics provided by the owner (use these exact lines for lyricLines, in this order; match them to the transcript and the sound phrases to time them):\n"""\n${opts.lyrics.slice(0, 4000)}\n"""` : ""}
 
-Edit rules:
-- Target length about ${opts.targetSeconds} seconds (within ±20%), unless the request says otherwise.
-- Open on the strongest moment. The first 2 seconds decide whether people keep watching.
-- Never cut in the middle of a sung line or spoken sentence: use the transcript times to cut on pauses.
-- For worship or singing, prefer longer continuous segments over many quick cuts. For montages, use 1.5-4s segments with variety.
-- Skip shaky, dark, blurry or blank moments you can see in the frame grids.
-- Each segment: start < end, inside the clip's duration, at least 0.8 seconds.
-- style: "talking-head" when one person mostly speaks to camera; "worship" for singing/music; "montage" for many short scenes.
-- TALKING-HEAD edits (fast, punchy, like top creators):
-  * Remove every pause longer than about 0.35s, ums, false starts and repeated takes. If a line is said several times, keep only the best (usually the LAST complete) take.
-  * Many short segments that follow the speech (each a clean phrase). Jump cuts are fine.
-  * Alternate zoom between "none" and "punch" on consecutive segments from the same clip so jump cuts feel intentional. Use "in" for the most emotional line.
-  * Fill the frame (layout "fill"), captions on.
-- WORSHIP edits: long continuous segments, never cut inside a sung line, zoom mostly "none"/"in", few or no overlays.
-- zoom "in" adds a slow push-in, "punch" is a static tighter crop.
-- emphasis: pick the words that carry the meaning (e.g. "Jesus", "never", "peace", numbers). They pop in a gold script font.
-- overlays: photos, screenshots or short clips that illustrate what is being said, floating as a card for 1.5-5s. Use clips that are photos or screenshots for this rather than as main segments. Don't cover the face for long; prefer "top" or "corner" while someone talks.
-- cta: an inviting closing line in the account's voice (e.g. "Type AMEN if this is for you") or empty.
-- layout: "fill" crops to fill the vertical frame; "blur-pad" keeps the whole frame over a blurred copy (better for landscape group shots). ${opts.layout === "auto" ? "Choose." : `Use "${opts.layout}".`}
-- showCaptions: ${opts.captions ? "true if there is meaningful speech or lyrics" : "false"}. captionLanguage: ${opts.captionLanguage === "auto" ? "the language being sung or spoken" : opts.captionLanguage === "te" ? "telugu" : "english"}.
-- hook: a short on-screen opener only if it helps (e.g. "Telugu Christmas carols in Dallas 🎄"). Empty string otherwise.
-- textOverlay: rarely, only when it adds meaning (a number, a key phrase).
-- mood picks the background music for the music versions.
+${recipes}
+
+General rules:
+- Target length about ${opts.targetSeconds} seconds (within ±15%), unless the request says otherwise. The hook must land in the first 1-3 seconds.
+- Each segment: start < end, inside the clip's duration, at least 0.8 s. Segments play in order.
+- Reframing is the most important picture decision: from the frame grids, set focusX/focusY on the main person's face/upper body and crop so heads, phones, empty walls and clutter in front are cut away. Never crop off the person's head.
+- Skip shaky, dark, blurry or blocked moments you can see in the frame grids.
+- grades: ${opts.autoColor ? "one entry per video clip used, from its picture stats and frames (fix dark rooms, blown-out whites, cold light; keep skin natural)." : "return an empty list (colour correction is off)."}
+- overlays: photos/screenshots/short clips floated as cards while someone talks; none for worship.
+- layout: "fill" crops to fill the vertical frame; "blur-pad" keeps the whole frame over a blurred copy (only for wide group shots where cropping loses people). ${opts.layout === "auto" ? "Choose." : `Use "${opts.layout}".`}
+- showCaptions: ${opts.captions ? "true if there is meaningful speech, or lyrics are provided" : "false"}. captionLanguage: ${opts.captionLanguage === "auto" ? "the language being sung or spoken" : opts.captionLanguage === "te" ? "telugu" : "english"}.
+- hook: short, specific, emotional; same language as the audience of the clip (Telugu songs may use a Telugu or English hook). ${opts.hookOptions > 1 ? `altHooks: ${opts.hookOptions - 1} more hooks in clearly different styles (e.g. a question, a feeling, a bold statement).` : "altHooks: empty."}
+- caption: 2-4 short lines that echo (not repeat) the hook, a line of the song or message, and the call to action.
+- mood picks background music for the music versions (not used under songs).
 
 Return the JSON plan.`;
 }
@@ -312,4 +393,30 @@ Write the updated guide:
 - Weigh recent feedback more than old. When feedback conflicts, follow the newest.
 - Only include what her feedback supports. Keep useful rules from the current guide unless contradicted.
 - Under 450 words. No preamble.`;
+}
+
+// ---------------------------------------------------------------------------
+// Quality check: Claude watches the rendered reel and fixes what's wrong once.
+
+export const EditReview = z.object({
+  verdict: z.enum(["good", "fix"]),
+  problems: z.array(z.string()).describe("Concrete problems seen in the rendered reel, empty if good"),
+  plan: EditPlan.describe("The plan to use: unchanged if good, corrected if fix"),
+});
+export type EditReview = z.infer<typeof EditReview>;
+
+export function editReviewPrompt(base: string, plan: EditPlan, sheets: string[], step: number, seconds: number) {
+  return `${base}
+
+You made this plan:
+${JSON.stringify(plan, null, 2)}
+
+It was rendered into a ${seconds.toFixed(1)}s reel. Frame grids of the FINISHED reel (4x3, one frame every ${step.toFixed(1)}s, timestamps on each frame): ${sheets.join(", ")}
+Open them with the Read tool and check like a demanding editor:
+- Is the main person well framed in every shot (head not cut off, not too small, no heads/phones blocking, not off-centre)?
+- Does it open on a strong moment and is the hook readable?
+- Is any shot dark, washed out, blurry, shaky or blank? Is colour natural (no orange skin)?
+- Do text, captions or lyrics overlap faces or each other, or sit too low (bottom 20% is covered by Instagram)?
+- Does it end on a complete line/thought?
+If everything is good, return verdict "good" with the same plan. Otherwise return verdict "fix", list the problems, and return a corrected plan (change only what fixes the problems).`;
 }

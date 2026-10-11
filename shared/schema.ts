@@ -26,7 +26,24 @@ export type AudioVariant = z.infer<typeof AudioVariant>;
 export const Language = z.enum(["english", "telugu", "mixed"]);
 export type Language = z.infer<typeof Language>;
 
-export const WatermarkPosition = z.enum(["bottom-center", "bottom-left", "top-left", "top-center", "top-right"]);
+export const WatermarkPosition = z.enum(["bottom-center", "bottom-left", "bottom-right", "top-left", "top-center", "top-right"]);
+export const TEXT_FONTS = ["clean", "bold", "elegant", "classic", "handwritten"] as const;
+export const TextFont = z.enum(TEXT_FONTS);
+export type TextFont = z.infer<typeof TextFont>;
+export const WatermarkStyle = z.enum(["plain", "shadow", "pill", "outline"]);
+
+export const CAPTION_STYLES = ["pop", "karaoke", "lines", "lyrics", "none"] as const;
+export const CaptionLook = z.object({
+  font: TextFont.default("bold"),
+  color: z.string().default("#ffffff"),
+  // Highlight for key words; empty = the brand highlight colour.
+  highlight: z.string().default(""),
+  size: z.enum(["small", "medium", "large"]).default("medium"),
+  position: z.enum(["upper", "middle", "lower"]).default("middle"),
+  background: z.enum(["none", "shadow", "box"]).default("shadow"),
+  uppercase: z.boolean().default(false),
+});
+export type CaptionLook = z.infer<typeof CaptionLook>;
 
 export const Settings = z.object({
   version: z.number().default(1),
@@ -38,11 +55,22 @@ export const Settings = z.object({
       watermarkPosition: WatermarkPosition.default("bottom-center"),
       watermarkOpacity: z.number().min(0).max(1).default(0.85),
       accentColor: z.string().default("#F4C77B"),
+      watermarkEnabled: z.boolean().default(true),
+      watermarkFont: TextFont.default("clean"),
+      watermarkSize: z.number().min(16).max(96).default(32),
+      watermarkStyle: WatermarkStyle.default("shadow"),
+      watermarkColor: z.string().default("#ffffff"),
+      watermarkShowLogo: z.boolean().default(true),
       outro: z
         .object({
           enabled: z.boolean().default(true),
+          // Big line on the end card; empty = the Instagram handle.
+          title: z.string().default(""),
           text: z.string().default("Follow for daily encouragement"),
-          seconds: z.number().min(0).max(5).default(2),
+          seconds: z.number().min(0).max(6).default(2),
+          showLogo: z.boolean().default(true),
+          // Let Claude write a closing line that fits each video instead of the fixed text.
+          claudeWrites: z.boolean().default(false),
         })
         .prefault({}),
     })
@@ -95,8 +123,10 @@ export const Settings = z.object({
       alwaysHashtags: z.array(z.string()).default(["#jesuschrist", "#faith"]),
       cta: z.string().default("Type AMEN if this is for you"),
       tone: z.string().default("warm, gentle, encouraging, sincere, never preachy"),
-      onVideoStyle: z.enum(["pop", "karaoke", "lines", "none"]).default("pop"),
+      onVideoStyle: z.enum(CAPTION_STYLES).default("pop"),
       soundEffects: z.boolean().default(true),
+      // How on-video text (captions, lyrics, hook, title card) looks. Editable per video too.
+      look: CaptionLook.prefault({}),
     })
     .prefault({}),
   reel: z
@@ -123,6 +153,78 @@ export const Settings = z.object({
 export type Settings = z.infer<typeof Settings>;
 export const defaultSettings = (): Settings => Settings.parse({});
 
+// Watermark and end card as used for one video. Pre-filled from Settings, editable per video.
+export const Branding = z.object({
+  watermark: z.object({
+    enabled: z.boolean(),
+    text: z.string(),
+    font: TextFont,
+    size: z.number().min(16).max(96),
+    position: WatermarkPosition,
+    opacity: z.number().min(0).max(1),
+    style: WatermarkStyle,
+    color: z.string(),
+    showLogo: z.boolean(),
+  }),
+  endCard: z.object({
+    enabled: z.boolean(),
+    title: z.string(),
+    text: z.string(),
+    seconds: z.number().min(0).max(6),
+    showLogo: z.boolean(),
+    claudeWrites: z.boolean(),
+  }),
+});
+export type Branding = z.infer<typeof Branding>;
+
+export function brandingFromSettings(s: Settings): Branding {
+  const b = s.brand;
+  return {
+    watermark: {
+      enabled: b.watermarkEnabled,
+      text: b.signatureText,
+      font: b.watermarkFont,
+      size: b.watermarkSize,
+      position: b.watermarkPosition,
+      opacity: b.watermarkOpacity,
+      style: b.watermarkStyle,
+      color: b.watermarkColor,
+      showLogo: b.watermarkShowLogo,
+    },
+    endCard: {
+      enabled: b.outro.enabled,
+      title: b.outro.title || b.handle,
+      text: b.outro.text,
+      seconds: b.outro.seconds,
+      showLogo: b.outro.showLogo,
+      claudeWrites: b.outro.claudeWrites,
+    },
+  };
+}
+
+// One-tap starting points for the watermark; every field stays editable afterwards.
+export const WATERMARK_PRESETS: Array<{ id: string; label: string; patch: Partial<Branding["watermark"]> }> = [
+  { id: "subtle", label: "Subtle", patch: { font: "clean", size: 28, style: "shadow", opacity: 0.7, position: "bottom-center", color: "#ffffff" } },
+  { id: "signature", label: "Handwritten", patch: { font: "handwritten", size: 48, style: "shadow", opacity: 0.9, position: "bottom-right", color: "#ffffff" } },
+  { id: "badge", label: "Badge", patch: { font: "bold", size: 26, style: "pill", opacity: 0.95, position: "top-left", color: "#ffffff" } },
+  { id: "elegant", label: "Elegant", patch: { font: "elegant", size: 36, style: "shadow", opacity: 0.85, position: "bottom-center", color: "#F4C77B" } },
+  { id: "bold", label: "Bold", patch: { font: "bold", size: 38, style: "outline", opacity: 1, position: "top-center", color: "#ffffff" } },
+];
+
+export const CAPTION_PRESETS: Array<{ id: string; label: string; style: (typeof CAPTION_STYLES)[number]; look: Partial<CaptionLook> }> = [
+  { id: "pop", label: "Big pop-up words", style: "pop", look: { font: "bold", size: "large", position: "middle", background: "shadow", uppercase: false } },
+  { id: "karaoke", label: "Karaoke highlight", style: "karaoke", look: { font: "bold", size: "medium", position: "lower", background: "shadow", uppercase: true } },
+  { id: "lyrics", label: "Worship lyrics", style: "lyrics", look: { font: "elegant", size: "medium", position: "lower", background: "shadow", uppercase: false } },
+  { id: "boxed", label: "Boxed lines", style: "lines", look: { font: "clean", size: "medium", position: "lower", background: "box", uppercase: false } },
+  { id: "handwritten", label: "Handwritten", style: "lines", look: { font: "handwritten", size: "large", position: "middle", background: "shadow", uppercase: false } },
+];
+
+export const CaptionChoice = z.object({ style: z.enum(CAPTION_STYLES), look: CaptionLook });
+export type CaptionChoice = z.infer<typeof CaptionChoice>;
+export function captionChoiceFromSettings(s: Settings): CaptionChoice {
+  return { style: s.captions.onVideoStyle, look: s.captions.look };
+}
+
 export const VerseRequest = z.object({
   type: z.literal("verse"),
   count: z.number().int().min(1).max(20).default(1),
@@ -132,6 +234,8 @@ export const VerseRequest = z.object({
   references: z.array(z.string()).default([]),
   instructions: z.string().default(""),
 });
+export const EDIT_TYPES = ["auto", "worship", "talking", "sermon", "montage"] as const;
+export type EditType = (typeof EDIT_TYPES)[number];
 export const EditRequest = z.object({
   type: z.literal("edit"),
   inputFileIds: z.array(z.string()).min(1),
@@ -143,6 +247,27 @@ export const EditRequest = z.object({
   captionLanguage: z.enum(["auto", "en", "te"]).default("auto"),
   keepOriginalAudio: z.boolean().default(true),
   alsoCarousel: z.boolean().default(false),
+  // What kind of footage this is; each has its own editing recipe.
+  editType: z.enum(EDIT_TYPES).default("auto"),
+  // Song mode: pasted lyrics are shown line by line instead of speech-recognition captions.
+  lyrics: z.string().max(6000).default(""),
+  songTitle: z.string().max(120).default(""),
+  singer: z.string().max(120).default(""),
+  // Who to keep in frame, e.g. "the woman in beige singing at the podium".
+  focus: z.string().max(200).default(""),
+  stabilize: z.enum(["auto", "on", "off"]).default("auto"),
+  cleanAudio: z.boolean().default(true),
+  autoColor: z.boolean().default(true),
+  // Claude watches the finished reel and fixes problems once before delivering.
+  qualityCheck: z.boolean().default(false),
+  // Parts of each clip to use (set by trimming in the browser). Missing = whole clip.
+  ranges: z.array(z.object({ index: z.number().int(), start: z.number().min(0), end: z.number().min(0) })).default([]),
+  // Extra lengths to cut from the same upload, e.g. [15, 60] next to targetSeconds.
+  extraLengths: z.array(z.number().min(6).max(90)).max(3).default([]),
+  // How many different opening hooks to make (each is a separate version).
+  hookOptions: z.number().int().min(1).max(3).default(1),
+  branding: Branding.optional(),
+  captionChoice: CaptionChoice.optional(),
 });
 export const CarouselRequest = z.object({
   type: z.literal("carousel"),
@@ -163,6 +288,8 @@ export const ReviseChanges = z.object({
   captions: z.enum(["on", "off"]).optional(),
   layout: z.enum(["fill", "blur-pad"]).optional(),
   slides: z.array(z.object({ title: z.string(), body: z.string() })).optional(),
+  branding: Branding.optional(),
+  captionChoice: CaptionChoice.optional(),
 });
 export type ReviseChanges = z.infer<typeof ReviseChanges>;
 export const ReviseRequest = z.object({

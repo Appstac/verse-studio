@@ -1,5 +1,6 @@
 // Local speech-to-text with whisper.cpp (free, runs on this computer).
 import { downloadWhisperModel, installWhisperCpp, transcribe } from "@remotion/install-whisper-cpp";
+import os from "node:os";
 import path from "node:path";
 import type { CaptionWord } from "../remotion/types";
 import { log } from "./log";
@@ -40,6 +41,8 @@ export async function transcribeWav(wav: string, model: Model, language: "auto" 
     tokensPerItem: 1,
     language: language === "auto" ? "auto" : language,
     printOutput: false,
+    // whisper.cpp defaults to 4 threads; use the whole machine minus one core.
+    additionalArgs: [["--threads", String(threads())]],
   });
   const words: CaptionWord[] = [];
   for (const item of res.transcription) {
@@ -48,4 +51,9 @@ export async function transcribeWav(wav: string, model: Model, language: "auto" 
     words.push({ text, startMs: item.offsets.from, endMs: Math.max(item.offsets.to, item.offsets.from + 80) });
   }
   return { language: res.result.language, words, text: words.map((w) => w.text).join(" ") };
+}
+
+function threads() {
+  const n = os.availableParallelism?.() ?? os.cpus().length;
+  return Math.max(2, Math.min(12, n - 1));
 }

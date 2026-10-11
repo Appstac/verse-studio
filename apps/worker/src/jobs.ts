@@ -1,14 +1,29 @@
 import fs from "node:fs";
 import path from "node:path";
 import type { z } from "zod";
-import { type Job, type OutputItem, type ReviseChanges, type Settings, MEDIA_PRESETS, PRESETS } from "../../../shared/schema";
+import {
+  type Branding,
+  type CaptionChoice,
+  type Job,
+  type OutputItem,
+  type ReviseChanges,
+  type Settings,
+  MEDIA_PRESETS,
+  PRESETS,
+  brandingFromSettings,
+} from "../../../shared/schema";
 import { findFootage, footageById, pixabayEnabled } from "./pixabay";
 import { FPS, TRANSITION_FRAMES, type BrandProps, type CaptionWord, type ClipEditProps, type ClipSegment, type PresetName, type VerseReelProps } from "../remotion/types";
 import { TRANSLATION_LABEL } from "./bible";
 import { mount, startFileServer, unmount } from "./fileserver";
 import { log } from "./log";
 import {
+  type PictureStats,
+  audioMap,
   contactSheet,
+  describeAudioMap,
+  frameSheets,
+  pictureStats,
   extractWav,
   makeSfx,
   ffmpeg,
@@ -22,12 +37,14 @@ import {
 import {
   CarouselPlan,
   EditPlan,
+  EditReview,
   VersePlan,
   VerseRevision,
   carouselFromVideoPrompt,
   carouselPrompt,
   carouselRevisionPrompt,
   editPrompt,
+  editReviewPrompt,
   editRevisionPrompt,
   versePrompt,
   verseRevisionPrompt,
@@ -60,7 +77,13 @@ export interface Ctx {
 // Specs: everything needed to re-render an output later with changes. Saved
 // next to each output in Drive, so quick changes work even after a restart.
 
-export interface VerseSpec {
+// Per-output look overrides (watermark, end card, caption style). Missing = Settings.
+interface SpecLook {
+  branding?: Branding;
+  captionChoice?: CaptionChoice;
+}
+
+export interface VerseSpec extends SpecLook {
   source: "verse";
   item: VerseItem;
   text: string;
@@ -81,7 +104,7 @@ export interface ClipRef {
   language?: string;
 }
 
-export interface EditSpec {
+export interface EditSpec extends SpecLook {
   source: "edit";
   request: Extract<Job["request"], { type: "edit" }>;
   plan: EditPlan;
@@ -97,7 +120,7 @@ export interface CarouselSlideSpec {
   reference?: string;
 }
 
-export interface CarouselSpec {
+export interface CarouselSpec extends SpecLook {
   source: "carousel";
   plan: CarouselPlan;
   preset: PresetName;
@@ -119,25 +142,29 @@ function seededPick<T>(arr: T[], seed: number): T | undefined {
 }
 const seedOf = (s: string) => [...s].reduce((a, c) => (a * 31 + c.charCodeAt(0)) >>> 0, 7);
 
-async function brandProps(ctx: Ctx, url: (f: string) => string): Promise<BrandProps> {
+async function brandProps(ctx: Ctx, url: (f: string) => string, branding?: Branding): Promise<BrandProps> {
   const b = ctx.settings.brand;
+  const br = branding ?? brandingFromSettings(ctx.settings);
   let logoSrc: string | undefined;
   if (b.logoFileId) {
     try {
-      const p = await ctx.store.download(b.logoFileId, path.join(ctx.work, "logo.png"));
+      const f = path.join(ctx.work, "logo.png");
+      const p = fs.existsSync(f) ? f : await ctx.store.download(b.logoFileId, f);
       logoSrc = url(p);
     } catch (e) {
       log("Logo download failed, continuing without it:", String(e));
     }
   }
+  const wm = br.watermark;
   return {
-    signatureText: b.signatureText,
+    signatureText: wm.text,
     handle: b.handle,
     logoSrc,
-    position: b.watermarkPosition,
-    opacity: b.watermarkOpacity,
+    position: wm.position,
+    opacity: wm.opacity,
     accent: b.accentColor,
-    outro: b.outro,
+    outro: { enabled: br.endCard.enabled, text: br.endCard.text, seconds: br.endCard.seconds, title: br.endCard.title || b.handle, showLogo: br.endCard.showLogo },
+    watermark: { enabled: wm.enabled, font: wm.font, size: wm.size, style: wm.style, color: wm.color, showLogo: wm.showLogo },
   };
 }
 
@@ -158,10 +185,14 @@ interface VariantPlan {
   music?: string;
 }
 
-async function variantPlans(ctx: Ctx, mood: string, seed: number, hasVoice: boolean): Promise<VariantPlan[]> {
+async function variantPlans(ctx: Ctx, mood: string, seed: number, hasVoice: boolean, noMusicUnderVoice = false): Promise<VariantPlan[]> {
   const v = ctx.settings.music.variants;
   const out: VariantPlan[] = [];
-  if (hasVoice && v.original) out.push({ label: "original", mode: "original" });
+  if (hasVoice && (v.original || noMusicUnderVoice)) out.push({ label: "original", mode: "original" });
+  if (hasVoice && noMusicUnderVoice) {
+    out.push({ label: "silent", mode: "silent" });
+    return out;
+  }
   if (v.library) {
     const m = await pickMusic(ctx, "library", mood, seed);
     if (m) out.push({ label: "library", mode: hasVoice ? "music-under-voice" : "music", music: m });
@@ -192,6 +223,8 @@ async function deliverReel(
     hashtags: string[];
     mood: string;
     hasVoice: boolean;
+    /** Songs: never put library music on top of the singing. */
+    noMusicUnderVoice?: boolean;
     folderId: string;
     spec: AnySpec;
     reference?: string;
@@ -200,7 +233,7 @@ async function deliverReel(
   } & Lineage,
 ): Promise<OutputItem> {
   const seed = seedOf(opts.slug);
-  const plans = await variantPlans(ctx, opts.mood, seed, opts.hasVoice);
+  const plans = await variantPlans(ctx, opts.mood, seed, opts.hasVoice, !!opts.noMusicUnderVoice);
   const variants: OutputItem["variants"] = [];
   for (const p of plans) {
     const local = path.join(ctx.work, `${opts.slug}-${p.label}.mp4`);
@@ -570,15 +603,24 @@ interface PreparedClip {
   index: number;
   fileId: string;
   name: string;
-  file: string;
   raw: string;
+  /** Start of the part being used in the original file (trim), seconds. */
+  offset: number;
+  /** Length of the part being used. */
   duration: number;
   width: number;
   height: number;
   hasAudio: boolean;
   isImage: boolean;
-  sheet: string;
+  sheets: string[];
+  sheetStep: number;
+  audioDesc: string;
+  pictureDesc: string;
   transcript?: Transcript;
+  /** Full-quality processed piece for rendering, and where it starts in clip time. */
+  file?: string;
+  fileStart: number;
+  fileLength: number;
 }
 
 // Phrases with exact start-end times, split wherever she pauses, so Claude can
@@ -587,15 +629,15 @@ function transcriptText(t?: Transcript) {
   if (!t || !t.words.length) return "";
   const out: string[] = [];
   let cur: string[] = [];
-  let start = t.words[0].startMs;
-  let end = t.words[0].endMs;
+  let start = 0;
+  let end = 0;
   const flush = () => {
     if (cur.length) out.push(`[${(start / 1000).toFixed(2)}-${(end / 1000).toFixed(2)}] ${cur.join(" ")}`);
     cur = [];
   };
   for (const w of t.words) {
     const gap = w.startMs - end;
-    if (cur.length && (gap > 350 || cur.length >= 12)) {
+    if (cur.length && (gap > 350 || cur.length >= 14)) {
       flush();
       if (gap > 350) out.push(`(pause ${(gap / 1000).toFixed(1)}s)`);
       start = w.startMs;
@@ -608,66 +650,154 @@ function transcriptText(t?: Transcript) {
   return out.join("\n").slice(0, 12000);
 }
 
-// Downloads, normalises, samples frames from and (unless cached) transcribes each clip.
+function describePicture(p: PictureStats | null) {
+  if (!p) return "";
+  const notes: string[] = [];
+  if (p.brightness < 0.32) notes.push("dark");
+  if (p.brightness > 0.62) notes.push("very bright");
+  if (p.clippedHighlights > 0.25) notes.push("blown-out highlights");
+  if (p.warmth < -0.15) notes.push("cold/blue light");
+  if (p.warmth > 0.35) notes.push("very warm/orange");
+  if (p.saturation < 0.25) notes.push("washed-out colour");
+  return `average brightness ${p.brightness}, highlight clipping ${p.clippedHighlights}, warmth ${p.warmth}, saturation ${p.saturation}${notes.length ? ` (${notes.join(", ")})` : ""}`;
+}
+
+/**
+ * Fast analysis of every clip: frame grids from keyframes, picture stats, a loudness
+ * map and (in parallel) speech-to-text. No full-quality processing happens here;
+ * that is done later only for the parts the edit actually uses.
+ */
 async function prepareClips(
   ctx: Ctx,
   refs: Array<{ fileId: string; name: string; words?: CaptionWord[]; language?: string }>,
-  captionLanguage: "auto" | "en" | "te",
+  opts: { captionLanguage: "auto" | "en" | "te"; ranges?: EditSpec["request"]["ranges"]; transcribe: boolean; fastModel: boolean; analyze: boolean },
 ): Promise<PreparedClip[]> {
   const clips: PreparedClip[] = [];
   for (let i = 0; i < refs.length; i++) {
     await checkCancelled(ctx);
     const { fileId, name } = refs[i];
-    await ctx.update({ stage: `Preparing clip ${i + 1} of ${refs.length}: ${name}`, progress: 0.02 + (0.2 * i) / refs.length });
+    await ctx.update({ stage: `Downloading clip ${i + 1} of ${refs.length}: ${name}`, progress: 0.02 + (0.15 * i) / refs.length });
     const raw = await ctx.store.download(fileId, path.join(ctx.work, "in", `${i}-${safeName(name, 40)}${path.extname(name) || ".mp4"}`));
-    const file = path.join(ctx.work, "in", `${i}-clip.mp4`);
-    if (isImageName(name)) {
+    const image = isImageName(name);
+    const info = image ? null : await probe(raw);
+    const clip: PreparedClip = {
+      index: i,
+      fileId,
+      name,
+      raw,
+      offset: 0,
+      duration: image ? 4 : info!.duration,
+      width: info?.width ?? 0,
+      height: info?.height ?? 0,
+      hasAudio: !image && !!info?.hasAudio,
+      isImage: image,
+      sheets: [],
+      sheetStep: 1,
+      audioDesc: "",
+      pictureDesc: "",
+      fileStart: 0,
+      fileLength: 0,
+    };
+    if (image) {
+      const file = path.join(ctx.work, "in", `${i}-still.mp4`);
       await ffmpeg([
         "-loop", "1", "-t", "4", "-i", raw,
         "-f", "lavfi", "-t", "4", "-i", "anullsrc=r=48000:cl=stereo",
         "-vf", "scale='if(gte(iw,ih),trunc(min(1920,iw)/2)*2,-2)':'if(gte(iw,ih),-2,trunc(min(1920,ih)/2)*2)',fps=30,format=yuv420p",
         "-c:v", "libx264", "-crf", "18", "-c:a", "aac", "-shortest", file,
       ]);
-    } else {
-      await normalizeVideo(raw, file);
+      const p = await probe(file);
+      Object.assign(clip, { file, fileStart: 0, fileLength: 4, width: p.width, height: p.height });
+      clip.sheets = [file.replace(/\.mp4$/, ".jpg")];
+      await ffmpeg(["-i", file, "-frames:v", "1", "-vf", "scale=540:-2", clip.sheets[0]]);
+      clips.push(clip);
+      continue;
     }
-    const info = await probe(file);
-    const sheet = path.join(ctx.work, `sheet-${i}.jpg`);
-    await contactSheet(file, info.duration, sheet);
-    const clip: PreparedClip = {
-      index: i,
-      fileId,
-      name,
-      file,
-      raw,
-      duration: info.duration,
-      width: info.width,
-      height: info.height,
-      hasAudio: info.hasAudio && !isImageName(name),
-      isImage: isImageName(name),
-      sheet,
-    };
-    if (refs[i].words) {
-      clip.transcript = { language: refs[i].language ?? "", words: refs[i].words!, text: refs[i].words!.map((w) => w.text).join(" ") };
-    } else if (clip.hasAudio) {
-      await ctx.update({ stage: `Listening to clip ${i + 1} (speech-to-text)`, progress: 0.05 + (0.2 * i) / refs.length });
-      try {
-        const wav = await extractWav(file, path.join(ctx.work, `audio-${i}.wav`));
-        clip.transcript = await ctx.ai.transcribe(wav, ctx.settings.advanced.whisperModel, captionLanguage);
-      } catch (e) {
-        log("Transcription failed, continuing without it:", String(e));
+    const range = opts.ranges?.find((r) => r.index === i);
+    if (range && range.end > range.start + 0.5) {
+      clip.offset = clamp(range.start, 0, Math.max(0, clip.duration - 1));
+      clip.duration = clamp(range.end, clip.offset + 0.5, clip.duration) - clip.offset;
+    }
+    // Pictures and sound are analysed at the same time.
+    const picture = (async () => {
+      if (!opts.analyze) return;
+      const sh = await frameSheets(raw, clip.duration, path.join(ctx.work, `sheet-${i}`), 48, { start: clip.offset, fast: true });
+      clip.sheets = sh.files;
+      clip.sheetStep = sh.step;
+      clip.pictureDesc = describePicture(await pictureStats(raw, clip.duration, clip.offset));
+    })();
+    const sound = (async () => {
+      if (!clip.hasAudio) return;
+      const wav = await extractWav(raw, path.join(ctx.work, `audio-${i}.wav`), clip.offset, clip.duration);
+      if (opts.analyze) clip.audioDesc = describeAudioMap(audioMap(wav));
+      if (refs[i].words) {
+        clip.transcript = { language: refs[i].language ?? "", words: refs[i].words!, text: refs[i].words!.map((w) => w.text).join(" ") };
+      } else if (opts.transcribe) {
+        await ctx.update({ stage: `Listening to clip ${i + 1} of ${refs.length}`, progress: 0.05 + (0.15 * i) / refs.length });
+        try {
+          const model = opts.fastModel ? "base" : ctx.settings.advanced.whisperModel;
+          clip.transcript = await ctx.ai.transcribe(wav, model, opts.captionLanguage);
+        } catch (e) {
+          log("Transcription failed, continuing without it:", String(e));
+        }
       }
-    }
+    })();
+    await Promise.all([picture, sound]);
     clips.push(clip);
   }
   return clips;
 }
 
-function editPromptFor(ctx: Ctx, req: EditSpec["request"], clips: PreparedClip[]) {
+/**
+ * Makes full-quality pieces of only the parts the plans use (plus a little
+ * margin), steadied and with cleaned-up sound if asked. Much faster than
+ * processing whole clips.
+ */
+async function materializeClips(ctx: Ctx, clips: PreparedClip[], plans: EditPlan[], req: EditSpec["request"]) {
+  const windows = new Map<number, [number, number]>();
+  const add = (i: number, a: number, b: number) => {
+    const c = clips[i];
+    if (!c || c.isImage) return;
+    const w = windows.get(i);
+    windows.set(i, [Math.min(w?.[0] ?? Infinity, a), Math.max(w?.[1] ?? -Infinity, b)]);
+  };
+  for (const plan of plans) {
+    let total = 0;
+    for (const sg of plan.segments) {
+      add(Math.round(sg.clip), sg.start, sg.end);
+      total += Math.max(0, sg.end - sg.start) / clamp(sg.speed || 1, 0.5, 2);
+    }
+    for (const ov of plan.overlays ?? []) add(Math.round(ov.clip), 0, Math.min(6, clips[Math.round(ov.clip)]?.duration ?? 6));
+    if (plan.audioBed && plan.audioBed.clip >= 0) add(plan.audioBed.clip, plan.audioBed.start, plan.audioBed.start + total);
+  }
+  let n = 0;
+  for (const [i, [a, b]] of windows) {
+    const c = clips[i];
+    const start = clamp(a - 0.6, 0, c.duration);
+    const end = clamp(b + 0.6, start + 0.5, c.duration);
+    if (c.file && c.fileStart <= start && c.fileStart + c.fileLength >= end) continue;
+    n++;
+    await checkCancelled(ctx);
+    await ctx.update({ stage: `Preparing the used part of clip ${i + 1} (${(end - start).toFixed(0)}s, full quality)`, progress: 0.35 + 0.05 * (n / windows.size) });
+    const out = path.join(ctx.work, "in", `${i}-part-${Math.round(start * 10)}-${Math.round(end * 10)}.mp4`);
+    await normalizeVideo(c.raw, out, {
+      start: c.offset + start,
+      length: end - start,
+      stabilize: req.stabilize ?? "auto",
+      cleanAudio: req.cleanAudio ?? true,
+      workDir: ctx.work,
+      onStage: (m) => void ctx.update({ stage: `${m} (clip ${i + 1})` }).catch(() => undefined),
+    });
+    const p = await probe(out);
+    Object.assign(c, { file: out, fileStart: start, fileLength: p.duration || end - start, width: p.width || c.width, height: p.height || c.height });
+  }
+}
+
+function editPromptFor(ctx: Ctx, req: EditSpec["request"], clips: PreparedClip[], targetSeconds = req.targetSeconds) {
   return editPrompt({
     s: ctx.settings,
     userPrompt: req.prompt,
-    targetSeconds: req.targetSeconds,
+    targetSeconds,
     clips: clips.map((c) => ({
       index: c.index,
       name: c.name,
@@ -676,13 +806,27 @@ function editPromptFor(ctx: Ctx, req: EditSpec["request"], clips: PreparedClip[]
       height: c.height,
       hasAudio: c.hasAudio,
       isImage: c.isImage,
-      sheet: path.basename(c.sheet),
+      sheets: c.sheets.map((f) => path.basename(f)),
+      sheetStep: c.sheetStep,
       transcript: transcriptText(c.transcript),
+      audio: c.audioDesc,
+      picture: c.pictureDesc,
     })),
     layout: req.layout,
     captions: req.captions,
     captionLanguage: req.captionLanguage,
+    editType: req.editType ?? "auto",
+    lyrics: req.lyrics ?? "",
+    songTitle: req.songTitle ?? "",
+    singer: req.singer ?? "",
+    focus: req.focus ?? "",
+    hookOptions: req.hookOptions ?? 1,
+    autoColor: req.autoColor ?? true,
   });
+}
+
+function clipRefs(clips: PreparedClip[]): ClipRef[] {
+  return clips.map((c) => ({ fileId: c.fileId, name: c.name, words: c.transcript?.words ?? [], language: c.transcript?.language }));
 }
 
 export async function runEditJob(ctx: Ctx) {
@@ -690,30 +834,63 @@ export async function runEditJob(ctx: Ctx) {
   if (req.type !== "edit") throw new Error("wrong job type");
   await startFileServer();
   const url = mount(ctx.job.id, ctx.work);
+  const t0 = Date.now();
   try {
     const clips = await prepareClips(
       ctx,
-      req.inputFileIds.map((id, i) => ({ fileId: id, name: req.inputNames[i] || "" })).map((r) => r),
-      req.captionLanguage,
+      req.inputFileIds.map((id, i) => ({ fileId: id, name: req.inputNames[i] || "" })),
+      {
+        captionLanguage: req.captionLanguage,
+        ranges: req.ranges,
+        // Montages without captions don't need words; pasted lyrics only need rough timing.
+        transcribe: !(req.editType === "montage" && !req.captions),
+        fastModel: !!req.lyrics?.trim(),
+        analyze: true,
+      },
     );
     for (const c of clips) if (!c.name) c.name = await ctx.store.fileName(c.fileId);
     await checkCancelled(ctx);
-    await ctx.update({ stage: "Claude is watching the clips and planning the edit", progress: 0.3 });
-    const plan = await ctx.ai.plan("edit", editPromptFor(ctx, req, clips), EditPlan, { cwd: ctx.work, allowRead: true, model: model(ctx) });
-    const spec: EditSpec = {
-      source: "edit",
-      request: req,
-      plan,
-      clips: clips.map((c) => ({ fileId: c.fileId, name: c.name, words: c.transcript?.words ?? [], language: c.transcript?.language })),
-      showCaptions: req.captions && plan.showCaptions,
-    };
+    await ctx.update({ stage: "Claude is watching the clips and planning the edit", progress: 0.25 });
+    const planOpts = { cwd: ctx.work, allowRead: true, model: model(ctx) };
+    const lengths = [req.targetSeconds, ...(req.extraLengths ?? []).filter((l) => Math.abs(l - req.targetSeconds) >= 3)];
+    const plans: Array<{ plan: EditPlan; seconds: number }> = [];
+    for (let k = 0; k < lengths.length; k++) {
+      if (k > 0) await ctx.update({ stage: `Claude is planning the ${lengths[k]}s version`, progress: 0.25 + 0.05 * k });
+      plans.push({ plan: await ctx.ai.plan("edit", editPromptFor(ctx, req, clips, lengths[k]), EditPlan, planOpts), seconds: lengths[k] });
+    }
+    await materializeClips(ctx, clips, plans.map((p) => p.plan), req);
+    log(`[${ctx.job.id}] analysis + planning + prep took ${Math.round((Date.now() - t0) / 1000)}s`);
+
     const folderId = await ctx.store.outputFolder(today(ctx.settings.auto.timezone), ctx.job.id);
-    const outputs = [await renderEditSpec(ctx, spec, clips, url, folderId, {})];
+    const outputs: OutputItem[] = [];
+    // Versions: each length, plus extra hook options on the main length.
+    const jobsToRender: Array<{ plan: EditPlan; label: string; qa: boolean }> = [];
+    plans.forEach((p, k) => jobsToRender.push({ plan: p.plan, label: lengths.length > 1 ? `${p.seconds}s` : "", qa: k === 0 && !!req.qualityCheck }));
+    const alt = (plans[0].plan.altHooks ?? []).filter((h) => h.trim()).slice(0, Math.max(0, (req.hookOptions ?? 1) - 1));
+    alt.forEach((h, k) => jobsToRender.push({ plan: { ...plans[0].plan, hook: h.trim() }, label: `hook ${k + 2}`, qa: false }));
+    for (let k = 0; k < jobsToRender.length; k++) {
+      const j = jobsToRender[k];
+      const spec: EditSpec = {
+        source: "edit",
+        request: req,
+        plan: j.plan,
+        clips: clipRefs(clips),
+        showCaptions: req.captions && j.plan.showCaptions,
+        branding: req.branding,
+        captionChoice: req.captionChoice,
+      };
+      const span = 0.5 / jobsToRender.length;
+      outputs.push(
+        await renderEditSpec(ctx, spec, clips, url, folderId, {}, { label: j.label, qa: j.qa, progressFrom: 0.42 + span * k, progressSpan: span, versionNo: k + 1, versions: jobsToRender.length }),
+      );
+      await ctx.update({ outputs: [...outputs] });
+    }
     if (req.alsoCarousel) {
       // Same message, second format: a carousel built from what was said.
-      await ctx.update({ stage: "Turning the video into a carousel", progress: 0.93, outputs: [...outputs] });
+      await ctx.update({ stage: "Turning the video into a carousel", progress: 0.94, outputs: [...outputs] });
+      const plan = plans[0].plan;
       const presets = ctx.settings.auto.presets.filter((p) => !MEDIA_PRESETS.includes(p));
-      const said = clips.map((c) => c.transcript?.text ?? "").join(" ").slice(0, 4000);
+      const said = (req.lyrics?.trim() || clips.map((c) => c.transcript?.text ?? "").join(" ")).slice(0, 4000);
       const cplan = await ctx.ai.plan(
         "carousel",
         carouselFromVideoPrompt({ s: ctx.settings, transcript: said, reelTitle: plan.title, reelCaption: plan.caption, presets: presets.length ? presets : ["paper"] }),
@@ -721,67 +898,140 @@ export async function runEditJob(ctx: Ctx) {
         { cwd: ctx.work, model: model(ctx) },
       );
       const cspec = await resolveCarousel(ctx, cplan, presets.length ? presets : ["paper"], plan.captionLanguage, 7, { used: [] });
-      outputs.push(await renderCarouselSpec(ctx, cspec, await brandProps(ctx, url), folderId, {}));
+      cspec.branding = req.branding;
+      outputs.push(await renderCarouselSpec(ctx, cspec, await brandProps(ctx, url, req.branding), folderId, {}));
     }
+    log(`[${ctx.job.id}] edit finished in ${Math.round((Date.now() - t0) / 1000)}s`);
     return outputs;
   } finally {
     unmount(ctx.job.id);
   }
 }
 
-async function renderEditSpec(ctx: Ctx, spec: EditSpec, clips: PreparedClip[], url: (f: string) => string, folderId: string, lineage: Lineage) {
+/** Maps a time in a clip (seconds, clip time) to the output timeline (ms), or null if not shown. */
+function timeMapper(segments: Array<{ clip: number; start: number; end: number; rate: number; outStart: number }>, bed?: { clip: number; start: number }) {
+  return (clip: number, t: number): number | null => {
+    if (bed) return clip === bed.clip && t >= bed.start ? (t - bed.start) * 1000 : null;
+    for (const sg of segments) if (sg.clip === clip && t >= sg.start - 0.05 && t <= sg.end + 0.05) return sg.outStart + ((t - sg.start) / sg.rate) * 1000;
+    return null;
+  };
+}
+
+interface RenderOpts {
+  label?: string;
+  qa?: boolean;
+  progressFrom?: number;
+  progressSpan?: number;
+  versionNo?: number;
+  versions?: number;
+}
+
+function buildEditProps(ctx: Ctx, spec: EditSpec, clips: PreparedClip[], url: (f: string) => string, brand: BrandProps): ClipEditProps {
   const s = ctx.settings;
   const { plan, request: req } = spec;
   const layout = spec.layout ?? (req.layout === "auto" ? plan.layout : req.layout);
+  const gradeIndex = new Map<number, number>();
+  const grades: NonNullable<ClipEditProps["grades"]> = [];
+  if (req.autoColor !== false) {
+    for (const g of plan.grades ?? []) {
+      if (gradeIndex.has(g.clip)) continue;
+      gradeIndex.set(g.clip, grades.length);
+      grades.push({
+        exposure: clamp(g.exposure, -1, 1),
+        contrast: clamp(g.contrast, -1, 1),
+        highlights: clamp(g.highlights, 0, 1),
+        saturation: clamp(g.saturation, -1, 1),
+        warmth: clamp(g.warmth, -1, 1),
+      });
+    }
+  }
+  const bedClip = plan.audioBed && plan.audioBed.clip >= 0 ? clips[plan.audioBed.clip] : undefined;
+  const bed = bedClip && bedClip.hasAudio && bedClip.file ? { clip: bedClip.index, start: clamp(plan.audioBed!.start, 0, bedClip.duration) } : undefined;
+
   const segments: ClipSegment[] = [];
-  const segClip: PreparedClip[] = [];
-  for (const seg of plan.segments) {
+  const map: Array<{ clip: number; start: number; end: number; rate: number; outStart: number }> = [];
+  let outMs = 0;
+  const planned = plan.segments.filter((sg) => clips[clamp(Math.round(sg.clip), 0, clips.length - 1)]);
+  planned.forEach((seg, i) => {
     const c = clips[clamp(Math.round(seg.clip), 0, clips.length - 1)];
+    if (!c.file) return;
     const start = clamp(seg.start, 0, Math.max(0, c.duration - 0.5));
     const end = clamp(seg.end, start + 0.5, c.duration);
-    if (end - start < 0.5) continue;
+    if (end - start < 0.5) return;
+    const rate = clamp(seg.speed || 1, 0.5, 2);
+    const next = planned[i + 1];
+    const prev = planned[i - 1];
+    const continuous = (a?: typeof seg, b?: typeof seg) => !!a && !!b && a.clip === b.clip && Math.abs(a.end - b.start) < 0.08;
+    const frames = Math.max(1, Math.round(((end - start) / rate) * FPS));
     segments.push({
       src: url(c.file),
       srcWidth: c.width,
       srcHeight: c.height,
-      start,
-      end,
-      playbackRate: clamp(seg.speed || 1, 0.5, 2),
+      start: start - c.fileStart,
+      end: end - c.fileStart,
+      playbackRate: rate,
       zoom: seg.zoom,
       layout,
-      textOverlay: seg.textOverlay.trim() || undefined,
+      textOverlay: seg.textOverlay?.trim() || undefined,
+      focusX: seg.focusX === undefined ? undefined : clamp(seg.focusX, 0, 1),
+      focusY: seg.focusY === undefined ? undefined : clamp(seg.focusY, 0, 1),
+      focusEndX: seg.focusEndX === undefined ? undefined : clamp(seg.focusEndX, 0, 1),
+      focusEndY: seg.focusEndY === undefined ? undefined : clamp(seg.focusEndY, 0, 1),
+      crop: seg.crop === undefined ? undefined : clamp(seg.crop, 1, 1.8),
+      grade: gradeIndex.get(c.index),
+      audioFadeIn: continuous(prev, seg) ? 0 : 3,
+      audioFadeOut: continuous(seg, next) ? 0 : next ? 3 : 18,
     });
-    segClip.push(c);
-  }
+    map.push({ clip: c.index, start, end, rate, outStart: outMs });
+    outMs += (frames / FPS) * 1000;
+  });
   if (!segments.length) throw new Error("The edit plan had no usable segments.");
   const transition = segments.length > 1 ? plan.transition : "cut";
+  if (transition === "fade") {
+    // Fades overlap neighbouring segments: shift the output timeline accordingly.
+    let acc = 0;
+    map.forEach((m, i) => {
+      m.outStart = acc;
+      acc += ((m.end - m.start) / m.rate) * 1000 - (i < map.length - 1 ? (TRANSITION_FRAMES / FPS) * 1000 : 0);
+    });
+  }
+  const toOut = timeMapper(map, bed);
 
-  // Map each clip's word timings onto the output timeline for captions.
+  // Captions: words from whichever source is heard.
   const words: CaptionWord[] = [];
-  let offsetFrames = 0;
-  segments.forEach((seg, i) => {
-    const c = segClip[i];
-    const segFramesN = Math.max(1, Math.round(((seg.end - seg.start) / seg.playbackRate) * FPS));
-    const offsetMs = (offsetFrames / FPS) * 1000;
+  for (const c of clips) {
+    if (bed && c.index !== bed.clip) continue;
     for (const w of c.transcript?.words ?? []) {
-      if (w.startMs >= seg.start * 1000 && w.endMs <= seg.end * 1000 + 200) {
-        words.push({
-          text: w.text,
-          startMs: offsetMs + (w.startMs - seg.start * 1000) / seg.playbackRate,
-          endMs: offsetMs + (Math.min(w.endMs, seg.end * 1000) - seg.start * 1000) / seg.playbackRate,
-        });
+      const a = toOut(c.index, w.startMs / 1000);
+      const b = toOut(c.index, w.endMs / 1000);
+      if (a !== null && b !== null && b > a) words.push({ text: w.text, startMs: a, endMs: b });
+    }
+  }
+  words.sort((x, y) => x.startMs - y.startMs);
+
+  // Lyrics: times are in the sound source; with segments, find the clip that's heard.
+  const lyrics: NonNullable<ClipEditProps["lyrics"]> = [];
+  const lyricClip = bed?.clip ?? map[0]?.clip ?? 0;
+  for (const l of plan.lyricLines ?? []) {
+    if (!l.text.trim()) continue;
+    const candidates = bed ? [lyricClip] : [...new Set(map.map((m) => m.clip))];
+    for (const ci of candidates) {
+      const a = toOut(ci, l.start);
+      const b = toOut(ci, l.end) ?? (a !== null ? a + (l.end - l.start) * 1000 : null);
+      if (a !== null && b !== null && b > a) {
+        lyrics.push({ text: l.text.trim(), startMs: a, endMs: b });
+        break;
       }
     }
-    offsetFrames += segFramesN - (transition === "fade" && i < segments.length - 1 ? TRANSITION_FRAMES : 0);
-  });
+  }
 
-  const hasVoice = req.keepOriginalAudio && clips.some((c) => c.hasAudio);
+  const choice = spec.captionChoice ?? req.captionChoice ?? { style: s.captions.onVideoStyle, look: s.captions.look };
   const telugu = plan.captionLanguage === "telugu";
-  const total = offsetFrames / FPS;
+  const total = outMs / 1000;
   const overlays: NonNullable<ClipEditProps["overlays"]> = [];
   for (const ov of plan.overlays ?? []) {
     const c = clips[Math.round(ov.clip)];
-    if (!c) continue;
+    if (!c || !c.file) continue;
     const at = clamp(ov.at, 0, Math.max(0, total - 1));
     overlays.push({
       src: url(c.isImage ? c.raw : c.file),
@@ -792,61 +1042,106 @@ async function renderEditSpec(ctx: Ctx, spec: EditSpec, clips: PreparedClip[], u
       aspect: c.width / Math.max(1, c.height),
     });
   }
-  let sfx: ClipEditProps["sfx"];
-  if (s.captions.soundEffects && plan.style !== "worship") {
+  const showWords = spec.showCaptions && choice.style !== "none";
+  const endCard = (spec.branding ?? req.branding)?.endCard;
+  const claudeLine = endCard ? endCard.claudeWrites : s.brand.outro.claudeWrites;
+  return {
+    segments,
+    transition,
+    captions: {
+      words: showWords ? words : [],
+      style: lyrics.length ? "lyrics" : showWords ? (choice.style === "lyrics" ? "lines" : choice.style) : "none",
+      language: telugu ? "telugu" : "english",
+      emphasis: plan.emphasis ?? [],
+      look: choice.look,
+    },
+    lyrics: lyrics.length && spec.showCaptions !== false ? lyrics : undefined,
+    titleCard: req.songTitle?.trim() ? { title: req.songTitle.trim(), subtitle: req.singer?.trim() || undefined } : undefined,
+    grades,
+    audioBed: bed ? { src: url(clips[bed.clip].file!), start: bed.start - clips[bed.clip].fileStart, fadeOutFrames: 24 } : undefined,
+    overlays,
+    sfx: undefined,
+    cta: claudeLine ? plan.cta?.trim() || undefined : undefined,
+    hook: plan.hook.trim() || undefined,
+    brand,
+    keepAudio: req.keepOriginalAudio && clips.some((c) => c.hasAudio),
+    preset: "night",
+  };
+}
+
+async function renderEditSpec(ctx: Ctx, spec: EditSpec, clips: PreparedClip[], url: (f: string) => string, folderId: string, lineage: Lineage, ro: RenderOpts = {}) {
+  const s = ctx.settings;
+  const from = ro.progressFrom ?? 0.42;
+  const span = ro.progressSpan ?? 0.45;
+  const brand = await brandProps(ctx, url, spec.branding ?? spec.request.branding);
+  const props = buildEditProps(ctx, spec, clips, url, brand);
+  const songLike = spec.plan.style === "worship" || !!props.audioBed || (props.lyrics?.length ?? 0) > 0;
+  if (s.captions.soundEffects && !songLike && spec.plan.style !== "sermon") {
     const f = await makeSfx(sub("sfx"));
     const dir = path.join(ctx.work, "sfx");
     fs.mkdirSync(dir, { recursive: true });
     fs.copyFileSync(f.whoosh, path.join(dir, "whoosh.mp3"));
     fs.copyFileSync(f.pop, path.join(dir, "pop.mp3"));
-    sfx = { whoosh: url(path.join(dir, "whoosh.mp3")), pop: url(path.join(dir, "pop.mp3")) };
+    props.sfx = { whoosh: url(path.join(dir, "whoosh.mp3")), pop: url(path.join(dir, "pop.mp3")) };
   }
-  const props: ClipEditProps = {
-    segments,
-    transition,
-    captions: {
-      words: spec.showCaptions ? words : [],
-      style: spec.showCaptions ? s.captions.onVideoStyle : "none",
-      language: telugu ? "telugu" : "english",
-      emphasis: plan.emphasis ?? [],
-    },
-    overlays,
-    sfx,
-    cta: plan.cta?.trim() || undefined,
-    hook: plan.hook.trim() || undefined,
-    brand: await brandProps(ctx, url),
-    keepAudio: hasVoice,
-    preset: "night",
-  };
 
   await checkCancelled(ctx);
-  await ctx.update({ stage: "Rendering the edit", progress: 0.4 });
-  const slug = safeName(plan.title || "edit") + (lineage.version && lineage.version > 1 ? `-v${lineage.version}` : "");
+  const tag = ro.versions && ro.versions > 1 ? ` (version ${ro.versionNo} of ${ro.versions}${ro.label ? `: ${ro.label}` : ""})` : "";
+  await ctx.update({ stage: `Rendering the edit${tag}`, progress: from });
+  const base = safeName(spec.plan.title || "edit") + (ro.label ? `-${safeName(ro.label, 12)}` : "");
+  const slug = base + (lineage.version && lineage.version > 1 ? `-v${lineage.version}` : "");
   const master = path.join(ctx.work, `${slug}-master.mp4`);
-  const duration = await renderClipEdit(props, master, (p) => {
-    void ctx.update({ progress: 0.4 + 0.45 * p }).catch(() => undefined);
+  let duration = await renderClipEdit(props, master, (p) => {
+    void ctx.update({ progress: from + span * 0.8 * p }).catch(() => undefined);
   });
+
+  if (ro.qa) {
+    // Claude watches the result and fixes what's wrong, once.
+    try {
+      await ctx.update({ stage: "Claude is checking the finished reel", progress: from + span * 0.8 });
+      const sh = await frameSheets(master, duration, path.join(ctx.work, `${slug}-check`), 36);
+      const review = await ctx.ai.plan(
+        "review",
+        editReviewPrompt(editPromptFor(ctx, spec.request, clips), spec.plan, sh.files.map((f) => path.basename(f)), sh.step, duration),
+        EditReview,
+        { cwd: ctx.work, allowRead: true, model: model(ctx) },
+      );
+      if (review.verdict === "fix") {
+        log(`[${ctx.job.id}] quality check found: ${review.problems.join("; ")}`);
+        spec.plan = review.plan;
+        spec.showCaptions = spec.request.captions && review.plan.showCaptions;
+        await materializeClips(ctx, clips, [review.plan], spec.request);
+        const fixed = buildEditProps(ctx, spec, clips, url, brand);
+        fixed.sfx = props.sfx;
+        await ctx.update({ stage: `Fixing: ${review.problems.slice(0, 2).join("; ").slice(0, 120)}`, progress: from + span * 0.85 });
+        duration = await renderClipEdit(fixed, master);
+      }
+    } catch (e) {
+      log("Quality check skipped:", e instanceof Error ? e.message : String(e));
+    }
+  }
+
   const masterHasAudio = (await probe(master)).hasAudio;
   const cover = path.join(ctx.work, `${slug}-cover.jpg`);
   await ffmpeg(["-ss", Math.min(1.5, duration / 3).toFixed(2), "-i", master, "-frames:v", "1", "-q:v", "3", cover]);
-  await ctx.update({ stage: "Adding music versions and uploading", progress: 0.88 });
+  await ctx.update({ stage: `Adding sound versions and uploading${tag}`, progress: from + span * 0.92 });
+  const telugu = spec.plan.captionLanguage === "telugu";
+  const asrTelugu = telugu && props.captions.words.length > 0;
   return deliverReel(ctx, {
     master,
     duration,
     cover,
     slug,
-    title: plan.title,
-    caption: plan.caption,
-    hashtags: plan.hashtags,
-    mood: plan.mood,
-    hasVoice: hasVoice && masterHasAudio,
+    title: spec.plan.title + (ro.label ? ` (${ro.label})` : ""),
+    caption: spec.plan.caption,
+    hashtags: spec.plan.hashtags,
+    mood: spec.plan.mood,
+    hasVoice: props.keepAudio && masterHasAudio,
+    noMusicUnderVoice: songLike,
     folderId,
     spec,
-    needsReview: telugu && props.captions.words.length > 0,
-    reviewNote:
-      telugu && props.captions.words.length > 0
-        ? "Telugu captions come from automatic speech recognition and may have mistakes. Watch before posting."
-        : undefined,
+    needsReview: asrTelugu,
+    reviewNote: asrTelugu ? "Telugu captions come from automatic speech recognition and may have mistakes. Watch before posting." : undefined,
     ...lineage,
   });
 }
@@ -867,6 +1162,8 @@ function describeChanges(ch: ReviseChanges, instruction: string) {
   if (ch.captions) bits.push(`captions ${ch.captions}`);
   if (ch.layout) bits.push(ch.layout === "fill" ? "fill the screen" : "keep whole frame");
   if (ch.slides) bits.push("edited slides");
+  if (ch.branding) bits.push("watermark / end card");
+  if (ch.captionChoice) bits.push("text style");
   if (instruction.trim()) bits.push(`“${instruction.trim().slice(0, 120)}”`);
   return bits.join(", ") || "re-rendered";
 }
@@ -885,6 +1182,7 @@ export async function runReviseJob(ctx: Ctx) {
     const folderId = await ctx.store.outputFolder(today(s.auto.timezone), ctx.job.id);
     const ch = req.changes;
     const instruction = req.instruction.trim();
+    if (ch.branding) (raw as SpecLook).branding = ch.branding;
 
     if (raw.source === "verse") {
       const spec: VerseSpec = { ...(raw as VerseSpec), item: { ...(raw as VerseSpec).item } };
@@ -958,7 +1256,7 @@ export async function runReviseJob(ctx: Ctx) {
       if (ch.caption !== undefined) spec.item.caption = ch.caption;
       const slug = `${safeName(spec.item.title || spec.item.reference)}-v${lineage.version}`;
       await ctx.update({ stage: "Rendering the new version", progress: 0.2 });
-      return [await renderVerseSpec(ctx, spec, await brandProps(ctx, url), url, slug, folderId, 0.2, 0.75, lineage)];
+      return [await renderVerseSpec(ctx, spec, await brandProps(ctx, url, spec.branding), url, slug, folderId, 0.2, 0.75, lineage)];
     }
 
     if (raw.source === "carousel") {
@@ -980,13 +1278,19 @@ export async function runReviseJob(ctx: Ctx) {
       }
       if (ch.preset && !MEDIA_PRESETS.includes(ch.preset)) spec.preset = ch.preset;
       if (ch.caption !== undefined) spec.plan = { ...spec.plan, caption: ch.caption };
-      return [await renderCarouselSpec(ctx, spec, await brandProps(ctx, url), folderId, lineage)];
+      return [await renderCarouselSpec(ctx, spec, await brandProps(ctx, url, spec.branding), folderId, lineage)];
     }
 
     // Edit
     const spec: EditSpec = { ...(raw as EditSpec), plan: { ...(raw as EditSpec).plan } };
     if (raw.caption) spec.plan.caption = raw.caption;
-    const clips = await prepareClips(ctx, spec.clips, spec.request.captionLanguage);
+    const clips = await prepareClips(ctx, spec.clips, {
+      captionLanguage: spec.request.captionLanguage,
+      ranges: spec.request.ranges,
+      transcribe: false,
+      fastModel: false,
+      analyze: !!instruction,
+    });
     if (instruction) {
       await ctx.update({ stage: "Claude is re-watching the clips and applying your change", progress: 0.3 });
       spec.plan = await ctx.ai.plan("revise", editRevisionPrompt(editPromptFor(ctx, spec.request, clips), spec.plan, instruction), EditPlan, {
@@ -996,6 +1300,7 @@ export async function runReviseJob(ctx: Ctx) {
       });
       spec.showCaptions = spec.request.captions && spec.plan.showCaptions;
     }
+    if (ch.captionChoice) spec.captionChoice = ch.captionChoice;
     if (ch.hook !== undefined) spec.plan.hook = ch.hook;
     if (ch.caption !== undefined) spec.plan.caption = ch.caption;
     if (ch.captions) spec.showCaptions = ch.captions === "on";
@@ -1008,6 +1313,7 @@ export async function runReviseJob(ctx: Ctx) {
         return { ...sg, end: clamp(sg.start + (sg.end - sg.start) * f, sg.start + 0.8, c.duration) };
       });
     }
+    await materializeClips(ctx, clips, [spec.plan], spec.request);
     return [await renderEditSpec(ctx, spec, clips, url, folderId, lineage)];
   } finally {
     unmount(ctx.job.id);

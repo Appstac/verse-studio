@@ -1,10 +1,11 @@
 import React, { useEffect, useRef, useState } from "react";
-import { PRESETS, type Preset, type Settings } from "@shared/schema";
+import { PRESETS, brandingFromSettings, type Preset, type Settings } from "@shared/schema";
 import { useApp } from "../App";
 import * as g from "../google";
 import { PRESET_INFO } from "./Make";
 import { loadLearned, queueJob, saveLearned } from "../studio";
 import { StudioComputerSection } from "./StudioComputer";
+import { BrandingEditor, CaptionEditor, useLogoUrl } from "./StyleEditors";
 
 function Section({ title, desc, children }: { title: string; desc?: string; children: React.ReactNode }) {
   return (
@@ -141,6 +142,7 @@ export function SettingsView() {
   const [s, setS] = useState<Settings>(() => structuredClone(studio.settings));
   const [saving, setSaving] = useState(false);
   const dirty = JSON.stringify(s) !== JSON.stringify(studio.settings);
+  const logoUrl = useLogoUrl(s.brand.logoFileId);
   const set = (f: (x: Settings) => void) =>
     setS((prev) => {
       const next = structuredClone(prev);
@@ -267,51 +269,53 @@ export function SettingsView() {
           </label>
         </Section>
 
-        <Section title="Signature" desc="Your name or handle on every video and slide.">
+        <Section title="Signature, watermark and end card" desc="Defaults for every video and slide. You can still change them for a single video before sending it.">
           <div className="grid2">
-            <label className="field">
-              <span>Signature text</span>
-              <input type="text" value={s.brand.signatureText} onChange={(e) => set((x) => void (x.brand.signatureText = e.target.value))} />
-            </label>
             <label className="field">
               <span>Instagram handle</span>
               <input type="text" value={s.brand.handle} onChange={(e) => set((x) => void (x.brand.handle = e.target.value))} />
             </label>
-          </div>
-          <div className="grid2">
-            <label className="field">
-              <span>Position</span>
-              <select value={s.brand.watermarkPosition} onChange={(e) => set((x) => void (x.brand.watermarkPosition = e.target.value as Settings["brand"]["watermarkPosition"]))}>
-                <option value="bottom-center">Bottom, centered</option>
-                <option value="bottom-left">Bottom left</option>
-                <option value="top-left">Top left</option>
-                <option value="top-center">Top, centered</option>
-                <option value="top-right">Top right</option>
-              </select>
-            </label>
-            <label className="field">
-              <span>Visibility: {Math.round(s.brand.watermarkOpacity * 100)}%</span>
-              <input type="range" min={0.2} max={1} step={0.05} value={s.brand.watermarkOpacity} onChange={(e) => set((x) => void (x.brand.watermarkOpacity = Number(e.target.value)))} />
-            </label>
-          </div>
-          <div className="grid2">
             <label className="field">
               <span>Highlight colour</span>
-              <input type="color" value={s.brand.accentColor} onChange={(e) => set((x) => void (x.brand.accentColor = e.target.value))} style={{ width: 64, height: 42, border: 0, background: "none" }} />
-              <small>Used for highlighted words and the verse reference.</small>
+              <input type="color" value={s.brand.accentColor} onChange={(e) => set((x) => void (x.brand.accentColor = e.target.value))} className="swatch-input" />
+              <small>Used for highlighted words, lyric lines and the verse reference.</small>
             </label>
-            <LogoField s={s} set={set} />
           </div>
-          <label className="check">
-            <input type="checkbox" checked={s.brand.outro.enabled} onChange={(e) => set((x) => void (x.brand.outro.enabled = e.target.checked))} />
-            <span>End each reel with a short “follow” card</span>
-          </label>
-          {s.brand.outro.enabled ? (
-            <label className="field">
-              <span>Closing card text</span>
-              <input type="text" value={s.brand.outro.text} onChange={(e) => set((x) => void (x.brand.outro.text = e.target.value))} />
-            </label>
-          ) : null}
+          <LogoField s={s} set={set} />
+          <BrandingEditor
+            value={brandingFromSettings(s)}
+            handle={s.brand.handle}
+            logo={logoUrl}
+            onChange={(b) =>
+              set((x) => {
+                const w = b.watermark;
+                x.brand.watermarkEnabled = w.enabled;
+                x.brand.signatureText = w.text;
+                x.brand.watermarkFont = w.font;
+                x.brand.watermarkSize = w.size;
+                x.brand.watermarkPosition = w.position;
+                x.brand.watermarkOpacity = w.opacity;
+                x.brand.watermarkStyle = w.style;
+                x.brand.watermarkColor = w.color;
+                x.brand.watermarkShowLogo = w.showLogo;
+                const e = b.endCard;
+                x.brand.outro = { ...x.brand.outro, enabled: e.enabled, title: e.title === x.brand.handle ? "" : e.title, text: e.text, seconds: e.seconds, showLogo: e.showLogo, claudeWrites: e.claudeWrites };
+              })
+            }
+          />
+        </Section>
+
+        <Section title="Text on videos" desc="How captions, lyrics and hooks look on edited videos. Pick a preset, then fine-tune.">
+          <CaptionEditor
+            value={{ style: s.captions.onVideoStyle, look: s.captions.look }}
+            accent={s.brand.accentColor}
+            onChange={(c) =>
+              set((x) => {
+                x.captions.onVideoStyle = c.style;
+                x.captions.look = c.look;
+              })
+            }
+          />
         </Section>
 
         <Section title="Captions and hashtags">
@@ -333,16 +337,6 @@ export function SettingsView() {
               <input type="number" min={0} max={5} value={s.captions.hashtagCount} onChange={(e) => set((x) => void (x.captions.hashtagCount = Math.max(0, Math.min(5, Number(e.target.value) || 0))))} />
               <small>Instagram allows up to 5.</small>
             </label>
-          </div>
-          <div className="field">
-            <span>On-video captions for edited clips</span>
-            <div className="seg" role="group" aria-label="Caption style">
-              {(["pop", "karaoke", "lines", "none"] as const).map((v) => (
-                <button key={v} type="button" aria-pressed={s.captions.onVideoStyle === v} onClick={() => set((x) => void (x.captions.onVideoStyle = v))}>
-                  {v === "pop" ? "Big pop-up words" : v === "karaoke" ? "Word by word" : v === "lines" ? "Whole lines" : "None"}
-                </button>
-              ))}
-            </div>
           </div>
           <label className="check">
             <input type="checkbox" checked={s.captions.soundEffects} onChange={(e) => set((x) => void (x.captions.soundEffects = e.target.checked))} />

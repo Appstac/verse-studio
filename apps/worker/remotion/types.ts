@@ -4,14 +4,44 @@
 export type PresetName = "dawn" | "night" | "paper" | "minimal" | "garden" | "photo" | "footage";
 export type Lang = "english" | "telugu";
 
+export type TextFontName = "clean" | "bold" | "elegant" | "classic" | "handwritten";
+
 export type BrandProps = {
   signatureText: string;
   logoSrc?: string;
-  position: "bottom-center" | "bottom-left" | "top-left" | "top-center" | "top-right";
+  position: "bottom-center" | "bottom-left" | "bottom-right" | "top-left" | "top-center" | "top-right";
   opacity: number;
   accent: string;
-  outro: { enabled: boolean; text: string; seconds: number };
+  outro: { enabled: boolean; text: string; seconds: number; title?: string; showLogo?: boolean };
   handle: string;
+  // Watermark look. Missing = the original look (Inter, 32px, shadow, logo shown).
+  watermark?: {
+    enabled: boolean;
+    font: TextFontName;
+    size: number;
+    style: "plain" | "shadow" | "pill" | "outline";
+    color: string;
+    showLogo: boolean;
+  };
+}
+
+export type CaptionLookProps = {
+  font: TextFontName;
+  color: string;
+  highlight: string;
+  size: "small" | "medium" | "large";
+  position: "upper" | "middle" | "lower";
+  background: "none" | "shadow" | "box";
+  uppercase: boolean;
+}
+
+// A light colour correction applied in the browser while rendering.
+export type Grade = {
+  exposure: number; // -1..1
+  contrast: number; // -1..1
+  highlights: number; // 0..1, how much to pull down blown-out areas
+  saturation: number; // -1..1
+  warmth: number; // -1..1
 }
 
 export type MediaRef = {
@@ -61,9 +91,18 @@ export type ClipSegment = {
   start: number; // seconds in source
   end: number; // seconds in source
   playbackRate: number;
-  zoom: "none" | "in" | "out" | "punch";
+  zoom: "none" | "in" | "out" | "punch" | "pan";
   layout: "fill" | "blur-pad";
   textOverlay?: string;
+  // Reframing: the point to keep centred (0-1 of the source frame) and how tight to crop.
+  focusX?: number;
+  focusY?: number;
+  focusEndX?: number;
+  focusEndY?: number;
+  crop?: number; // 1 = just fill the frame, up to 1.8
+  grade?: number; // index into ClipEditProps.grades
+  audioFadeIn?: number; // frames
+  audioFadeOut?: number; // frames
 }
 
 export type Overlay = {
@@ -78,7 +117,19 @@ export type Overlay = {
 export type ClipEditProps = {
   segments: ClipSegment[];
   transition: "cut" | "fade";
-  captions: { words: CaptionWord[]; style: "pop" | "karaoke" | "lines" | "none"; language: Lang; emphasis?: string[] };
+  captions: {
+    words: CaptionWord[];
+    style: "pop" | "karaoke" | "lines" | "lyrics" | "none";
+    language: Lang;
+    emphasis?: string[];
+    look?: CaptionLookProps;
+  };
+  // Song lyrics, one line at a time, on the output timeline.
+  lyrics?: Array<{ text: string; startMs: number; endMs: number }>;
+  titleCard?: { title: string; subtitle?: string };
+  grades?: Grade[];
+  // One continuous sound source under all the pictures (songs): pictures can cut freely.
+  audioBed?: { src: string; start: number; fadeOutFrames: number };
   overlays?: Overlay[];
   sfx?: { whoosh?: string; pop?: string };
   cta?: string;

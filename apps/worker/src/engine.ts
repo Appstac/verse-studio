@@ -8,6 +8,7 @@ import { Cancelled, type Ctx, type Planner, runCarouselJob, runEditJob, runRevis
 import { learnIfNeeded, loadLearned, mirrorSkill } from "./learn";
 import { log } from "./log";
 import { makeStarterPad, rmrf } from "./media";
+import { warmUpRenderer } from "./render";
 import { sub } from "./paths";
 import type { Store } from "./store";
 import {
@@ -67,6 +68,7 @@ export class Engine {
 
   async start(opts: { once?: boolean } = {}) {
     await this.store.init();
+    if (!opts.once) warmUpRenderer();
     await this.recoverStuckJobs();
     await this.ensureStarterMusic();
     // The learned style guide lives in Drive, so it comes back after a restart

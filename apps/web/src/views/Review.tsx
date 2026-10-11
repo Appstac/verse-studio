@@ -1,9 +1,22 @@
 // Rating, notes and quick changes for one finished reel or carousel.
 import React, { useEffect, useState } from "react";
-import { FEEDBACK_TAGS, PRESETS, outputKey, type Job, type OutputItem, type Preset, type ReviseChanges } from "@shared/schema";
+import {
+  Branding,
+  CaptionChoice,
+  FEEDBACK_TAGS,
+  PRESETS,
+  brandingFromSettings,
+  captionChoiceFromSettings,
+  outputKey,
+  type Job,
+  type OutputItem,
+  type Preset,
+  type ReviseChanges,
+} from "@shared/schema";
 import { useApp } from "../App";
 import { loadSpec, queueRevision, saveFeedback } from "../studio";
 import { PRESET_INFO } from "./Make";
+import { BrandingEditor, CaptionEditor, useLogoUrl } from "./StyleEditors";
 
 function Stars({ value, onChange }: { value?: number; onChange: (n: number) => void }) {
   return (
@@ -92,7 +105,14 @@ function RatePanel({ job, o, preset, onDone }: { job: Job; o: OutputItem; preset
 
 const QUICK_IDEAS: Record<string, string[]> = {
   verse: ["Make the hook a question", "Pick a more comforting verse", "Shorter caption", "Write it in Telugu"],
-  edit: ["Start with the strongest moment", "Keep the whole chorus", "Fewer cuts, longer shots", "Make it 15 seconds"],
+  edit: [
+    "Start with the strongest moment",
+    "Keep the whole chorus",
+    "Tighter on the singer",
+    "Brighter and warmer",
+    "Fewer cuts, longer shots",
+    "Make it 15 seconds",
+  ],
   carousel: ["Make the cover more personal", "Add one more scripture slide", "Shorter text on each slide"],
 };
 
@@ -110,6 +130,18 @@ function ChangePanel({ job, o, spec, onDone }: { job: Job; o: OutputItem; spec: 
   const [instruction, setInstruction] = useState("");
   const [remember, setRemember] = useState(false);
   const [busy, setBusy] = useState(false);
+  const [branding, setBranding] = useState<Branding | null>(null);
+  const [captionChoice, setCaptionChoice] = useState<CaptionChoice | null>(null);
+  const logoUrl = useLogoUrl(studio.settings.brand.logoFileId);
+  // What this video was made with (its saved spec), or the current defaults.
+  const origBranding = (() => {
+    const p = Branding.safeParse(spec?.branding ?? spec?.request?.branding);
+    return p.success ? p.data : brandingFromSettings(studio.settings);
+  })();
+  const origCaption = (() => {
+    const p = CaptionChoice.safeParse(spec?.captionChoice ?? spec?.request?.captionChoice);
+    return p.success ? p.data : captionChoiceFromSettings(studio.settings);
+  })();
 
   useEffect(() => {
     if (!spec) return;
@@ -139,6 +171,8 @@ function ChangePanel({ job, o, spec, onDone }: { job: Job; o: OutputItem; spec: 
       if (JSON.stringify(orig) !== JSON.stringify(slides)) ch.slides = slides;
     }
     if (caption !== o.caption) ch.caption = caption;
+    if (branding && JSON.stringify(branding) !== JSON.stringify(origBranding)) ch.branding = branding;
+    if (source === "edit" && captionChoice && JSON.stringify(captionChoice) !== JSON.stringify(origCaption)) ch.captionChoice = captionChoice;
     if (preset) ch.preset = preset;
     if (speed !== "normal") ch.speed = speed;
     if (!Object.keys(ch).length && !instruction.trim()) {
@@ -261,6 +295,16 @@ function ChangePanel({ job, o, spec, onDone }: { job: Job; o: OutputItem; spec: 
             <span>Instagram caption</span>
             <textarea style={{ minHeight: 80 }} value={caption} onChange={(e) => setCaption(e.target.value)} />
           </label>
+          <details className="subpanel">
+            <summary>Watermark and end card</summary>
+            <BrandingEditor value={branding ?? origBranding} onChange={setBranding} handle={studio.settings.brand.handle} logo={logoUrl} />
+          </details>
+          {source === "edit" ? (
+            <details className="subpanel">
+              <summary>Text style</summary>
+              <CaptionEditor value={captionChoice ?? origCaption} onChange={setCaptionChoice} accent={studio.settings.brand.accentColor} />
+            </details>
+          ) : null}
         </div>
       </details>
       <label className="check">

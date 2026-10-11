@@ -1,20 +1,66 @@
 import { bundle } from "@remotion/bundler";
 import { ensureBrowser, renderMedia, renderStill, selectComposition } from "@remotion/renderer";
+import crypto from "node:crypto";
+import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import type { ClipEditProps, SlideProps, VerseReelProps } from "../remotion/types";
 import { log } from "./log";
+import { sub } from "./paths";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 let serveUrl: Promise<string> | null = null;
 
+// The templates are bundled once per code version and kept on disk, so a restart
+// (or an update that doesn't touch the templates) doesn't re-bundle (about 2 minutes).
+function templatesHash(): string {
+  const h = crypto.createHash("sha1");
+  const walk = (dir: string) => {
+    for (const e of fs.readdirSync(dir, { withFileTypes: true }).sort((a, b) => a.name.localeCompare(b.name))) {
+      const f = path.join(dir, e.name);
+      if (e.isDirectory()) walk(f);
+      else if (/\.(tsx?|css|json)$/.test(e.name)) h.update(e.name).update(fs.readFileSync(f));
+    }
+  };
+  walk(path.join(here, "..", "remotion"));
+  try {
+    h.update(fs.readFileSync(path.join(here, "..", "package.json")));
+  } catch {
+    /* ignore */
+  }
+  return h.digest("hex").slice(0, 12);
+}
+
 function getServeUrl(): Promise<string> {
   if (!serveUrl) {
-    log("Bundling video templates (first run takes a minute)...");
-    serveUrl = bundle({ entryPoint: path.join(here, "..", "remotion", "index.ts") });
+    serveUrl = (async () => {
+      const dir = path.join(sub("bundle"), templatesHash());
+      if (fs.existsSync(path.join(dir, "index.html"))) return dir;
+      log("Preparing video templates (once per update, about a minute)...");
+      const tmp = `${dir}-tmp-${process.pid}`;
+      await bundle({ entryPoint: path.join(here, "..", "remotion", "index.ts"), outDir: tmp });
+      fs.rmSync(dir, { recursive: true, force: true });
+      fs.renameSync(tmp, dir);
+      // Keep only the newest two bundles.
+      const all = fs
+        .readdirSync(sub("bundle"))
+        .map((n) => ({ n, t: fs.statSync(path.join(sub("bundle"), n)).mtimeMs }))
+        .sort((a, b) => b.t - a.t);
+      for (const old of all.slice(2)) fs.rmSync(path.join(sub("bundle"), old.n), { recursive: true, force: true });
+      return dir;
+    })();
+    serveUrl.catch(() => (serveUrl = null));
   }
   return serveUrl;
+}
+
+/** Bundles templates and downloads the renderer's browser in the background at start-up. */
+export function warmUpRenderer() {
+  void prepareBrowser()
+    .then(() => getServeUrl())
+    .then(() => log("Video templates ready."))
+    .catch((e) => log("Renderer warm-up failed (will retry on first job):", e instanceof Error ? e.message : String(e)));
 }
 
 const browserExecutable = process.env.REMOTION_BROWSER || null;
@@ -25,7 +71,8 @@ function prepareBrowser() {
   return browserReady;
 }
 
-const concurrency = Math.max(1, Math.min(8, Math.floor(os.cpus().length / 2)));
+const cores = os.availableParallelism?.() ?? os.cpus().length;
+const concurrency = Math.max(2, Math.min(8, cores - 1));
 
 async function renderVideo(id: string, inputProps: Record<string, unknown>, out: string, onProgress?: (p: number) => void) {
   await prepareBrowser();
@@ -40,6 +87,8 @@ async function renderVideo(id: string, inputProps: Record<string, unknown>, out:
     browserExecutable,
     concurrency,
     crf: 18,
+    x264Preset: "veryfast",
+    offthreadVideoThreads: Math.min(4, Math.max(2, Math.floor(cores / 2))),
     pixelFormat: "yuv420p",
     audioBitrate: "192k",
     imageFormat: "jpeg",
