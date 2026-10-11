@@ -26,7 +26,7 @@ export interface Store {
   listBackgrounds(): Promise<StoredFile[]>;
   outputFolder(date: string, jobId: string): Promise<string>;
   upload(local: string, folderId: string, name?: string): Promise<string>;
-  readState<T>(name: string, fallback: T): Promise<T>;
+  readState<T>(name: string, fallback: T, strict?: boolean): Promise<T>;
   writeState(name: string, data: unknown): Promise<void>;
   heartbeat(hb: Heartbeat): Promise<void>;
   addLibraryMusic(local: string, mood: string): Promise<void>;
@@ -118,13 +118,15 @@ export class DriveStore implements Store {
     return d.upload(local, folderId, name);
   }
 
-  async readState<T>(name: string, fallback: T): Promise<T> {
+  // strict: a file that exists but can't be read is an error, not "empty".
+  async readState<T>(name: string, fallback: T, strict = false): Promise<T> {
     const file = await d.findChild(this.f.State, `${name}.json`);
     if (!file?.id) return fallback;
     this.stateIds.set(name, file.id);
     try {
       return await d.readJson<T>(file.id);
-    } catch {
+    } catch (e) {
+      if (strict) throw e;
       return fallback;
     }
   }
@@ -218,7 +220,7 @@ export class LocalStore implements Store {
     fs.copyFileSync(local, this.p(rel));
     return rel;
   }
-  async readState<T>(name: string, fallback: T) {
+  async readState<T>(name: string, fallback: T, _strict = false) {
     const f = this.p("State", `${name}.json`);
     return fs.existsSync(f) ? (JSON.parse(fs.readFileSync(f, "utf8")) as T) : fallback;
   }

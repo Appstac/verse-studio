@@ -49,7 +49,7 @@ export const Settings = z.object({
     .object({
       enabled: z.boolean().default(false),
       reelsPerDay: z.number().int().min(0).max(20).default(2),
-      carouselsPerWeek: z.number().int().min(0).max(14).default(1),
+      carouselsPerWeek: z.number().int().min(0).max(7).default(1),
       runAt: z.string().regex(/^\d{2}:\d{2}$/).default("05:30"),
       timezone: z.string().default("America/Chicago"),
       themes: z
@@ -183,6 +183,7 @@ export const Job = z.object({
   log: z.array(z.string()).default([]),
   workerId: z.string().optional(),
   approved: z.boolean().optional(),
+  attempts: z.number().int().default(0),
 });
 export type Job = z.infer<typeof Job>;
 

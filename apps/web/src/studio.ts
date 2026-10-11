@@ -1,6 +1,6 @@
 // App data: settings, jobs and worker status, all read from Drive.
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Heartbeat, Job, Settings, defaultSettings, newJobId, type JobRequest } from "@shared/schema";
+import { Heartbeat, Job, JobRequest, Settings, defaultSettings, newJobId } from "@shared/schema";
 import * as g from "./google";
 
 export interface JobEntry {
@@ -57,18 +57,19 @@ export async function queueJob(f: g.Folders, request: JobRequest): Promise<Job> 
     source: "manual",
     createdAt: ts,
     updatedAt: ts,
-    request,
+    request: JobRequest.parse(request),
     stage: "Waiting for the studio computer",
     progress: 0,
     outputs: [],
     log: [],
+    attempts: 0,
   };
   await g.writeJson(job, { parent: f.Jobs, name: `${job.id}.json` });
   return job;
 }
 
 export async function cancelJob(f: g.Folders, entry: JobEntry) {
-  await g.writeJson({ cancel: true, at: new Date().toISOString() }, { parent: f.Jobs, name: `${entry.job.id}.cancel` });
+  await g.writeJson({ cancel: true, at: new Date().toISOString() }, { parent: f.Jobs, name: `${entry.job.id}.cancel`, mimeType: "text/plain" });
   if (entry.job.status === "queued") {
     await g.writeJson({ ...entry.job, status: "cancelled", stage: "Cancelled", updatedAt: new Date().toISOString() }, { id: entry.fileId });
   }

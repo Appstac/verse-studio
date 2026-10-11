@@ -452,7 +452,7 @@ export async function runEditJob(ctx: Ctx) {
         await ffmpeg([
           "-loop", "1", "-t", "4", "-i", raw,
           "-f", "lavfi", "-t", "4", "-i", "anullsrc=r=48000:cl=stereo",
-          "-vf", "scale='min(1920,iw)':-2,fps=30,format=yuv420p",
+          "-vf", "scale='if(gte(iw,ih),trunc(min(1920,iw)/2)*2,-2)':'if(gte(iw,ih),-2,trunc(min(1920,ih)/2)*2)',fps=30,format=yuv420p",
           "-c:v", "libx264", "-crf", "18", "-c:a", "aac", "-shortest", file,
         ]);
       } else {
@@ -563,6 +563,7 @@ export async function runEditJob(ctx: Ctx) {
     const duration = await renderClipEdit(props, master, (p) => {
       void ctx.update({ progress: 0.4 + 0.45 * p }).catch(() => undefined);
     });
+    const masterHasAudio = (await probe(master)).hasAudio;
     const cover = path.join(ctx.work, `${slug}-cover.jpg`);
     await ffmpeg(["-ss", Math.min(1.5, duration / 3).toFixed(2), "-i", master, "-frames:v", "1", "-q:v", "3", cover]);
     await ctx.update({ stage: "Adding music versions and uploading", progress: 0.88 });
@@ -576,7 +577,7 @@ export async function runEditJob(ctx: Ctx) {
       caption: plan.caption,
       hashtags: plan.hashtags,
       mood: plan.mood,
-      hasVoice,
+      hasVoice: hasVoice && masterHasAudio,
       folderId,
       needsReview: telugu && props.captions.words.length > 0,
       reviewNote:

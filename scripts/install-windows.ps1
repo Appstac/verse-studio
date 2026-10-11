@@ -19,7 +19,8 @@ if (-not (Have claude) -and -not (Test-Path "$env:USERPROFILE\.local\bin\claude.
   irm https://claude.ai/install.ps1 | iex
   RefreshPath
 }
-& "$env:USERPROFILE\.local\bin\claude.exe" --version 2>$null; if ($LASTEXITCODE -ne 0) { claude --version }
+$exe = "$env:USERPROFILE\.local\bin\claude.exe"
+if (Test-Path $exe) { & $exe --version } else { claude --version }
 
 Step "Installing packages (a few minutes the first time)"
 npm.cmd install

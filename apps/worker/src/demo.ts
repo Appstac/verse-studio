@@ -105,7 +105,7 @@ async function main() {
     await ffmpeg(["-f", "lavfi", "-i", "smptehdbars=s=1080x1920:r=30:d=6", "-f", "lavfi", "-i", "sine=f=440:d=6", "-shortest", "-c:v", "libx264", "-pix_fmt", "yuv420p", "-c:a", "aac", path.join(up, "clip-b.mp4")]);
   }
   const ts = new Date().toISOString();
-  const base = { status: "queued" as const, source: "manual" as const, createdAt: ts, updatedAt: ts, stage: "", progress: 0, outputs: [], log: [] };
+  const base = { status: "queued" as const, source: "manual" as const, createdAt: ts, updatedAt: ts, stage: "", progress: 0, outputs: [], log: [], attempts: 0 };
   const jobs: Job[] = [
     { ...base, id: newJobId(), request: { type: "verse", count: 2, theme: "", language: "mixed", preset: "auto", references: [], instructions: "" } },
     { ...base, id: newJobId(), request: { type: "carousel", topic: "", slides: 4, language: "english", preset: "auto" } },

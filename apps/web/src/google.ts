@@ -172,14 +172,14 @@ export async function createFolder(name: string, parent?: string, marker = false
 
 export async function findChild(parent: string, name: string, folder = false): Promise<DFile | undefined> {
   const q = `name='${esc(name)}' and '${parent}' in parents and trashed=false${folder ? ` and mimeType='${FOLDER}'` : ""}`;
-  return (await list(q, { pageSize: 5 }))[0];
+  return (await list(q, { pageSize: 5, orderBy: "createdTime" }))[0];
 }
 
 export type Folders = Record<(typeof SUBFOLDERS)[number] | "root", string>;
 
 export async function ensureFolders(): Promise<Folders> {
   const roots = await list(
-    `name='${esc(ROOT_FOLDER_NAME)}' and mimeType='${FOLDER}' and trashed=false and appProperties has { key='app' and value='${APP_MARKER}' }`,
+    `name='${esc(ROOT_FOLDER_NAME)}' and mimeType='${FOLDER}' and trashed=false and 'root' in parents`,
   );
   const root = roots[0]?.id ?? (await createFolder(ROOT_FOLDER_NAME, undefined, true));
   const map: Record<string, string> = { root };
@@ -201,14 +201,15 @@ export async function readJson<T>(id: string): Promise<T> {
   return (await api(`${API}/files/${id}?alt=media`)).json();
 }
 
-export async function writeJson(data: unknown, opts: { id?: string; parent?: string; name?: string }): Promise<string> {
+export async function writeJson(data: unknown, opts: { id?: string; parent?: string; name?: string; mimeType?: string }): Promise<string> {
   const body = JSON.stringify(data, null, 2);
+  const mime = opts.mimeType ?? "application/json";
   if (opts.id) {
     await api(`${UPLOAD}/files/${opts.id}?uploadType=media`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body });
     return opts.id;
   }
   const boundary = "vs" + Math.random().toString(36).slice(2);
-  const meta = JSON.stringify({ name: opts.name, parents: [opts.parent], mimeType: "application/json" });
+  const meta = JSON.stringify({ name: opts.name, parents: [opts.parent], mimeType: mime });
   const multipart = `--${boundary}\r\nContent-Type: application/json; charset=UTF-8\r\n\r\n${meta}\r\n--${boundary}\r\nContent-Type: application/json\r\n\r\n${body}\r\n--${boundary}--`;
   const j = await (
     await api(`${UPLOAD}/files?uploadType=multipart&fields=id`, {

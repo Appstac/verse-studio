@@ -226,7 +226,7 @@ function VerseForm() {
         e.preventDefault();
         setBusy(true);
         try {
-          const references = refs.split(/\n|;/).map((r) => r.trim()).filter(Boolean);
+          const references = refs.split(/\n|;/).map((r) => r.trim()).filter(Boolean).slice(0, 20);
           await queueJob(studio.folders, {
             type: "verse",
             count: references.length || count,

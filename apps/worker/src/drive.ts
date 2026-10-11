@@ -25,7 +25,7 @@ const esc = (s: string) => s.replace(/\\/g, "\\\\").replace(/'/g, "\\'");
 export async function findChild(parentId: string | "root", name: string, folderOnly = false) {
   const q = [`name='${esc(name)}'`, `'${parentId}' in parents`, "trashed=false"];
   if (folderOnly) q.push(`mimeType='${FOLDER}'`);
-  const res = await drive().files.list({ q: q.join(" and "), fields: "files(id,name,mimeType,modifiedTime)", pageSize: 10 });
+  const res = await drive().files.list({ q: q.join(" and "), fields: "files(id,name,mimeType,modifiedTime)", pageSize: 10, orderBy: "createdTime" });
   return res.data.files?.[0] ?? null;
 }
 
@@ -49,7 +49,8 @@ let folders: FolderMap | null = null;
 export async function ensureFolders(): Promise<FolderMap> {
   if (folders) return folders;
   const res = await drive().files.list({
-    q: `name='${esc(ROOT_FOLDER_NAME)}' and mimeType='${FOLDER}' and trashed=false and appProperties has { key='app' and value='${APP_MARKER}' }`,
+    // drive.file only ever shows files this app created, so the name is enough.
+    q: `name='${esc(ROOT_FOLDER_NAME)}' and mimeType='${FOLDER}' and trashed=false and 'root' in parents`,
     fields: "files(id,createdTime)",
     orderBy: "createdTime",
   });

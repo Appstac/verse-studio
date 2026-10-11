@@ -20,7 +20,8 @@ export function claudeBinary(): { bin: string; shell: boolean } {
       : [path.join(home, ".local", "bin", "claude"), "/opt/homebrew/bin/claude", "/usr/local/bin/claude"];
   for (const c of candidates) if (fs.existsSync(c)) return (resolved = { bin: c, shell: /\.(cmd|bat)$/i.test(c) });
   const which = spawnSync(process.platform === "win32" ? "where" : "which", ["claude"], { encoding: "utf8" });
-  const first = which.stdout?.split(/\r?\n/).find(Boolean);
+  const lines = (which.stdout ?? "").split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
+  const first = process.platform === "win32" ? lines.find((l) => /\.(exe|cmd|bat)$/i.test(l)) : lines[0];
   if (first) return (resolved = { bin: first.trim(), shell: /\.(cmd|bat)$/i.test(first.trim()) });
   return (resolved = { bin: "claude", shell: process.platform === "win32" });
 }
@@ -57,7 +58,7 @@ async function runClaude(prompt: string, jsonSchema: Record<string, unknown>, op
   const { bin, shell } = claudeBinary();
   const args = ["-p", "--output-format", "json", "--permission-mode", "dontAsk"];
   if (opts.allowRead) args.push("--allowedTools", "Read");
-  if (opts.model) args.push("--model", opts.model);
+  if (opts.model && /^[\w.\-\[\]]+$/.test(opts.model)) args.push("--model", opts.model);
   // .cmd shims need a shell, where long JSON arguments are unsafe, so the
   // schema then goes in the prompt instead and the answer is validated locally.
   let fullPrompt = prompt;
@@ -66,7 +67,9 @@ async function runClaude(prompt: string, jsonSchema: Record<string, unknown>, op
 
   const started = Date.now();
   const out = await new Promise<string>((resolve, reject) => {
-    const child = spawn(bin, args, { cwd: opts.cwd, shell, windowsHide: true, env: { ...process.env } });
+    // With a shell (Windows .cmd shims) the path must be quoted in case it has spaces.
+    const child = spawn(shell ? `"${bin}"` : bin, args, { cwd: opts.cwd, shell, windowsHide: true, env: { ...process.env } });
+    child.stdin.on("error", () => undefined);
     let stdout = "";
     let stderr = "";
     const timer = setTimeout(() => {

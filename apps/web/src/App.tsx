@@ -115,10 +115,11 @@ export function App() {
   const [signedIn, setSignedIn] = useState(() => g.restoreToken());
   const [page, setPage] = useState<Page>(() => (location.hash.slice(1) as Page) || "today");
   const [msg, setMsg] = useState<string | null>(null);
+  const [expired, setExpired] = useState(false);
   const { studio, error, refresh, saveSettings } = useStudio(signedIn);
 
   useEffect(() => {
-    const onLost = () => setSignedIn(false);
+    const onLost = () => setExpired(true);
     window.addEventListener("vs-auth-lost", onLost);
     return () => window.removeEventListener("vs-auth-lost", onLost);
   }, []);
@@ -137,7 +138,7 @@ export function App() {
     setTimeout(() => setMsg((x) => (x === m ? null : x)), 3200);
   }, []);
 
-  if (!signedIn) return <SignIn onDone={() => setSignedIn(true)} />;
+  if (!signedIn || (expired && !studio)) return <SignIn onDone={() => (setSignedIn(true), setExpired(false), void refresh())} />;
   if (!studio) {
     return (
       <div className="welcome">
@@ -209,7 +210,27 @@ export function App() {
             </div>
             <WorkerStatus w={studio.worker} />
           </div>
-          {error ? <p className="notice err" style={{ marginBottom: 16 }}>{error}</p> : null}
+          {expired ? (
+            <div className="notice warn row spread" style={{ marginBottom: 16 }}>
+              <span>Your Google session timed out. Anything you were typing is still here.</span>
+              <button
+                className="btn small primary"
+                onClick={async () => {
+                  try {
+                    await g.signIn(true);
+                    setExpired(false);
+                    void refresh();
+                  } catch (e) {
+                    toast(e instanceof Error ? e.message : "Sign-in failed");
+                  }
+                }}
+              >
+                Continue
+              </button>
+            </div>
+          ) : error && !/session expired/i.test(error) ? (
+            <p className="notice err" style={{ marginBottom: 16 }}>{error}</p>
+          ) : null}
           {page === "today" && <Today />}
           {page === "make" && <Make />}
           {page === "library" && <Library />}

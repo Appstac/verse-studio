@@ -91,8 +91,10 @@ export class Engine {
   private async recoverStuckJobs() {
     for (const { fileId, job } of await this.store.listJobs()) {
       if (job.status === "working" && job.workerId === WORKER_ID) {
-        job.status = "queued";
-        job.stage = "Restarted after the worker stopped";
+        const tooMany = (job.attempts ?? 0) >= 2;
+        job.status = tooMany ? "failed" : "queued";
+        job.stage = tooMany ? "Failed" : "Restarted after the worker stopped";
+        if (tooMany) job.error = "The studio computer stopped twice while making this. Try again, or try fewer or shorter clips.";
         job.updatedAt = new Date().toISOString();
         await this.store.saveJob(job, fileId);
       }
@@ -123,7 +125,7 @@ export class Engine {
     const [h, m] = s.auto.runAt.split(":").map(Number);
     const runMinutes = h * 60 + m;
     const now = zonedParts(s.auto.timezone);
-    const state = await this.store.readState<{ lastAutoDate?: string }>("auto", {});
+    const state = await this.store.readState<{ lastAutoDate?: string }>("auto", {}, true);
     const doneToday = state.lastAutoDate === now.date;
     this.nextAutoRun = `${doneToday || now.minutes >= runMinutes ? "tomorrow" : "today"} ${s.auto.runAt} (${s.auto.timezone})`;
     if (doneToday || now.minutes < runMinutes) return;
@@ -150,6 +152,7 @@ export class Engine {
         progress: 0,
         outputs: [],
         log: [],
+        attempts: 0,
       });
     }
     if (carouselDays(s.auto.carouselsPerWeek).includes(now.weekday)) {
@@ -164,10 +167,12 @@ export class Engine {
         progress: 0,
         outputs: [],
         log: [],
+        attempts: 0,
       });
     }
-    for (const j of jobs) await this.store.saveJob(j);
+    // Mark the day as done first, so a failure below can never queue the batch twice.
     await this.store.writeState("auto", { lastAutoDate: now.date, createdAt: ts, jobs: jobs.map((j) => j.id) });
+    for (const j of jobs) await this.store.saveJob(j);
     log(`Auto mode: queued ${jobs.length} job(s) for ${now.date}.`);
   }
 
@@ -190,7 +195,7 @@ export class Engine {
     this.current = job.id;
     const work = sub("work", job.id);
     let saving = Promise.resolve();
-    const state: Job = { ...job, status: "working", workerId: WORKER_ID, stage: "Starting", progress: 0, error: undefined };
+    const state: Job = { ...job, status: "working", workerId: WORKER_ID, stage: "Starting", progress: 0, error: undefined, attempts: (job.attempts ?? 0) + 1 };
     let lastWrite = 0;
     const save = (force = false) => {
       const now = Date.now();
@@ -221,6 +226,7 @@ export class Engine {
     log(`Starting ${job.request.type} job ${job.id}`);
     await save(true);
     await this.beat();
+    const pulse = setInterval(() => void this.beat(), 60000);
     try {
       const outputs =
         job.request.type === "verse" ? await runVerseJob(ctx) : job.request.type === "edit" ? await runEditJob(ctx) : await runCarouselJob(ctx);
@@ -244,6 +250,7 @@ export class Engine {
       }
       await save(true);
     } finally {
+      clearInterval(pulse);
       await saving;
       this.busy = false;
       this.current = undefined;

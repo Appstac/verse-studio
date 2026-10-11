@@ -121,7 +121,7 @@ export function SettingsView() {
             </label>
             <label className="field">
               <span>Carousels per week</span>
-              <input type="number" min={0} max={14} value={s.auto.carouselsPerWeek} onChange={(e) => set((x) => void (x.auto.carouselsPerWeek = Math.max(0, Math.min(14, Number(e.target.value) || 0))))} />
+              <input type="number" min={0} max={7} value={s.auto.carouselsPerWeek} onChange={(e) => set((x) => void (x.auto.carouselsPerWeek = Math.max(0, Math.min(7, Number(e.target.value) || 0))))} />
             </label>
             <label className="field">
               <span>Make them at</span>

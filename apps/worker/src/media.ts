@@ -63,7 +63,7 @@ export async function probe(file: string): Promise<ProbeInfo> {
 export async function normalizeVideo(input: string, output: string) {
   await ffmpeg([
     "-i", input,
-    "-vf", "scale='if(gte(iw,ih),min(1920,iw),-2)':'if(gte(iw,ih),-2,min(1920,ih))':flags=lanczos,fps=30,format=yuv420p",
+    "-vf", "scale='if(gte(iw,ih),trunc(min(1920,iw)/2)*2,-2)':'if(gte(iw,ih),-2,trunc(min(1920,ih)/2)*2)':flags=lanczos,fps=30,format=yuv420p",
     "-c:v", "libx264", "-preset", "veryfast", "-crf", "18", "-g", "30",
     "-c:a", "aac", "-b:a", "192k", "-ar", "48000", "-ac", "2",
     "-movflags", "+faststart",
@@ -175,7 +175,7 @@ export function isVideoName(n: string) {
   return /\.(mp4|mov|m4v|webm|mkv|avi|3gp)$/i.test(n);
 }
 export function isImageName(n: string) {
-  return /\.(jpe?g|png|webp|heic)$/i.test(n);
+  return /\.(jpe?g|png|webp)$/i.test(n);
 }
 export function isAudioName(n: string) {
   return /\.(mp3|m4a|wav|aac|ogg|flac)$/i.test(n);
