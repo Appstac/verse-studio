@@ -106,6 +106,9 @@ function SignIn({ onDone }: { onDone: () => void }) {
           </button>
         </div>
         {err ? <p className="notice err">{err}</p> : null}
+        <p className="hint">
+          <a href="/privacy.html">Privacy policy</a> · <a href="/terms.html">Terms</a>
+        </p>
       </div>
     </div>
   );
