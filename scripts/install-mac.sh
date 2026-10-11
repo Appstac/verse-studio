@@ -46,7 +46,7 @@ cat > "$PLIST" <<PL
 <plist version="1.0"><dict>
   <key>Label</key><string>com.versestudio.worker</string>
   <key>WorkingDirectory</key><string>$REPO</string>
-  <key>ProgramArguments</key><array><string>/bin/bash</string><string>-lc</string><string>export PATH="$HOME/.local/bin:/opt/homebrew/bin:/usr/local/bin:\$PATH"; exec caffeinate -i npm run worker</string></array>
+  <key>ProgramArguments</key><array><string>/bin/bash</string><string>-lc</string><string>export PATH="$HOME/.local/bin:/opt/homebrew/bin:/usr/local/bin:\$PATH"; export VERSE_STUDIO_SUPERVISOR=launchd; if [ -f "$HOME/.verse-studio/update.flag" ]; then (git pull --ff-only &amp;&amp; npm install --no-audit --no-fund) &gt;&gt; "$HOME/.verse-studio/service.log" 2&gt;&amp;1; rm -f "$HOME/.verse-studio/update.flag"; fi; exec caffeinate -i npm run worker</string></array>
   <key>RunAtLoad</key><true/>
   <key>KeepAlive</key><true/>
   <key>StandardOutPath</key><string>$HOME/.verse-studio/service.log</string>

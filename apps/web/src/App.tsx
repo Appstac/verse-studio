@@ -45,12 +45,13 @@ export function WorkerStatus({ w }: { w: Heartbeat | null }) {
   const online = workerOnline(w);
   let text = "Studio computer offline";
   if (!w) text = "Studio computer not set up yet";
+  else if (online && w.paused) text = "Studio computer paused";
   else if (online && w.busy) text = "Studio computer is making videos";
   else if (online) text = "Studio computer ready";
   else text = `Studio computer offline since ${new Date(w.lastSeen).toLocaleString()}`;
   return (
     <span className="status" title={w ? `${w.hostname} (${w.platform}), worker ${w.version}` : undefined}>
-      <span className={`dot ${online ? (w?.busy ? "busy" : "on") : ""}`} />
+      <span className={`dot ${online ? (w?.paused ? "paused" : w?.busy ? "busy" : "on") : ""}`} />
       {text}
     </span>
   );

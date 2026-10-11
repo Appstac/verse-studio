@@ -1,7 +1,7 @@
 import { Feedback, LEARNED_FILE, outputKey, type OutputItem, type ReviseChanges } from "@shared/schema";
 // App data: settings, jobs and worker status, all read from Drive.
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Heartbeat, Job, JobRequest, Settings, defaultSettings, newJobId } from "@shared/schema";
+import { Heartbeat, Job, JobRequest, Settings, WorkerControl, defaultSettings, newJobId } from "@shared/schema";
 import * as g from "./google";
 
 export interface JobEntry {
@@ -49,6 +49,21 @@ export async function loadWorker(f: g.Folders): Promise<Heartbeat | null> {
   if (!file) return null;
   const p = Heartbeat.safeParse(await g.readJson(file.id).catch(() => null));
   return p.success ? p.data : null;
+}
+
+export async function loadControl(f: g.Folders): Promise<{ id?: string; control: WorkerControl | null }> {
+  const file = await g.findChild(f.State, "control.json");
+  if (!file) return { control: null };
+  const p = WorkerControl.safeParse(await g.readJson(file.id).catch(() => null));
+  return { id: file.id, control: p.success ? p.data : null };
+}
+
+/** Sends a request to the studio computer; it applies it on its next check (within about a minute). */
+export async function sendControl(f: g.Folders, change: Omit<WorkerControl, "requestedAt">): Promise<WorkerControl> {
+  const { id } = await loadControl(f);
+  const control: WorkerControl = { ...change, requestedAt: new Date().toISOString() };
+  await g.writeJson(control, id ? { id } : { parent: f.State, name: "control.json" });
+  return control;
 }
 
 export async function queueJob(f: g.Folders, request: JobRequest): Promise<Job> {

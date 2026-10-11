@@ -45,13 +45,8 @@ if ($LASTEXITCODE -ne 0) { throw "Google sign-in failed" }
 Step "Check-up"
 npm.cmd run doctor
 
-Step "Start automatically when you log in"
-$action = New-ScheduledTaskAction -Execute "powershell.exe" -Argument "-NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File `"$repo\scripts\run-worker.ps1`""
-$trigger = New-ScheduledTaskTrigger -AtLogOn -User $env:USERNAME
-$settings = New-ScheduledTaskSettingsSet -ExecutionTimeLimit ([TimeSpan]::Zero) -RestartCount 999 -RestartInterval (New-TimeSpan -Minutes 1) -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -StartWhenAvailable
-Register-ScheduledTask -TaskName "Verse Studio Worker" -Action $action -Trigger $trigger -Settings $settings -Description "Makes Verse Studio videos" -Force | Out-Null
-Start-ScheduledTask -TaskName "Verse Studio Worker"
-Write-Host "Worker started in the background. Log: $env:USERPROFILE\.verse-studio\worker.log"
+Step "Start automatically, restart if closed"
+& (Join-Path $PSScriptRoot "setup-autostart.ps1")
 
 $ans = Read-Host "Stop this PC from sleeping while plugged in, so auto mode always runs? (y/n)"
 if ($ans -eq "y") { powercfg /change standby-timeout-ac 0; powercfg /change hibernate-timeout-ac 0; Write-Host "Sleep turned off on AC power." }

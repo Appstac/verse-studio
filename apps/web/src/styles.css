@@ -207,3 +207,11 @@ input[type="range"] { width: 100%; accent-color: var(--gold); }
 .chip.good.on { background: var(--sage); border-color: var(--sage); color: #fff; }
 .chip.bad.on { background: var(--rose); border-color: var(--rose); color: #fff; }
 .learned { font-family: var(--serif); white-space: pre-wrap; line-height: 1.6; min-height: 260px; }
+
+/* Studio computer panel */
+.dot.paused { background: var(--muted); box-shadow: 0 0 0 4px color-mix(in srgb, var(--muted) 20%, transparent); }
+.dot.inline { display: inline-block; vertical-align: middle; margin-right: 4px; }
+.kvgrid { display: grid; grid-template-columns: max-content 1fr; gap: 6px 18px; font-size: 15px; }
+.kvgrid > span { color: var(--muted); }
+.kvgrid > b { font-weight: 600; min-width: 0; overflow-wrap: anywhere; }
+@media (max-width: 480px) { .kvgrid { grid-template-columns: 1fr; gap: 2px; } .kvgrid > b { margin-bottom: 8px; } }

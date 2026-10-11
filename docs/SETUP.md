@@ -80,7 +80,7 @@ The script installs Node.js and Claude Code if they're missing, installs the pac
 - **Claude login**: Claude opens in the terminal. Choose to log in with a **Claude account** (Pro/Max), finish in the browser, then type `/exit`. This uses her subscription. No API key is involved.
 - **Google sign-in**: a browser tab opens. Sign in with **the same Google account** as the website. Google shows a "hasn't been verified" notice for personal projects; choose **Continue**.
 - **Check-up**: every line should show ✔.
-- **Background start**: a scheduled task named "Verse Studio Worker" starts it now and at every log-on, and restarts it if it stops.
+- **Background start**: runs `scripts\setup-autostart.ps1` (see "Always on" below).
 - **Sleep**: say **y** to keep the PC awake on mains power, so the daily run is never missed.
 
 Within a minute the website shows **Studio computer ready**.
@@ -88,6 +88,28 @@ Within a minute the website shows **Studio computer ready**.
 The first job takes longer: it downloads the video renderer's browser (about 100 MB) and, for edits, the speech-recognition model (about 500 MB for "Balanced").
 
 **Mac instead:** `bash scripts/install-mac.sh` does the same and keeps the worker alive with launchd.
+
+## Always on (autostart, restart, heartbeat)
+
+Already installed with an older version? In the `verse-studio` folder, double-click **Set up autostart (Windows).cmd** once. It replaces the old "Verse Studio Worker" task.
+
+What it sets up:
+
+- A hidden scheduled task named **Verse Studio** that runs at sign-in and every 5 minutes. If the worker isn't running it starts it; if it has frozen (no sign of life for 5 minutes) it restarts it. No windows, no commands.
+- Optional: answer **y** to run even when nobody is signed in (after Windows Update restarts the PC overnight). Windows asks for the account password once and stores it in Task Scheduler.
+- A **Verse Studio** folder on the desktop and in the Start menu with: Start, Stop, Restart, **Autostart on-off**, Status, Worker log, and a link to the website.
+- **Heartbeat**: the worker writes its status to Drive (`State/worker.json`) every 20 seconds, and every minute while it is making a video. The website shows it in the header and in **Settings → Studio computer** (status, last heartbeat, version, Claude status, next auto batch, last problem).
+
+Switches, from anywhere (**Settings → Studio computer**, they apply within about a minute):
+
+| Switch | Effect |
+|---|---|
+| Make videos | Off = paused. Still online and reporting, but no new videos or auto batches. |
+| Start automatically and restart if closed | Off = keeps running now, but won't start after a restart or come back if it closes. Turn it back on from the website while it's online, or with the desktop shortcut. |
+| Restart | Restarts the worker (after the current video, if one is in progress). |
+| Update to latest version | Downloads the latest code from GitHub, installs packages, restarts. Your `.env` keys are never touched. |
+
+On the PC, **Stop** turns it off until you press **Start** or restart the PC. **Autostart on-off** is the same switch as on the website.
 
 ## 5. First run
 
@@ -106,13 +128,14 @@ The first job takes longer: it downloads the video renderer's browser (about 100
 
 ## Updating
 
-On the PC: `cd ~/verse-studio; git pull; npm install`, then restart the task (or the PC). Vercel redeploys the website automatically on every push.
+From the website: **Settings → Studio computer → Update to latest version**. (By hand on the PC: `git pull`, `npm install`, then the Restart shortcut.) Vercel redeploys the website automatically on every push.
 
 ## Troubleshooting
 
 | What you see | Fix |
 |---|---|
-| "Studio computer offline" | PC asleep, off, or not logged in. Log in; the task starts by itself. Log: `C:\Users\<name>\.verse-studio\worker.log` |
+| "Studio computer offline" | PC asleep, off, or not signed in. It comes back by itself within 5 minutes once the PC is on (unless autostart is off: use the Start shortcut). Logs: `C:\Users\<name>\.verse-studio\service.log` and `worker.log`, or the "Worker log" shortcut |
+| "Started by hand, can't restart itself" | Double-click **Set up autostart (Windows).cmd** once. |
 | Job failed: "Claude Code isn't logged in" | On the PC run `claude`, then `/login`. |
 | Job failed: "usage limit reached" | Her Claude plan hit its limit. It resets in a few hours; press **Try again**. Fewer reels per day, or "sonnet" under Settings → Advanced, uses less. |
 | Google sign-in stops working after 7 days | The consent screen is still in "Testing". Publish it (step 2.3), then run `npm run login` on the PC again. |

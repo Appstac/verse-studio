@@ -248,7 +248,7 @@ export function Today() {
 
       {!studio.worker ? (
         <p className="notice warn" style={{ marginBottom: 20 }}>
-          The studio computer hasn't connected yet. Finish the worker setup on the Windows PC (docs/SETUP.md, steps 4 to 6). Anything you queue now will be made once it's online.
+          The studio computer hasn't connected yet. Finish the worker setup on the Windows PC (docs/SETUP.md, steps 4 to 6), then double-click “Set up autostart (Windows).cmd” once so it starts by itself. Anything you queue now will be made once it's online.
         </p>
       ) : null}
 

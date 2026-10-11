@@ -2,7 +2,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { type Job, type Settings, newJobId } from "../../../shared/schema";
+import { type Job, type Settings, WorkerControl, newJobId } from "../../../shared/schema";
 import { WORKER_ID, VERSION } from "./config";
 import { Cancelled, type Ctx, type Planner, runCarouselJob, runEditJob, runReviseJob, runVerseJob } from "./jobs";
 import { learnIfNeeded, loadLearned, mirrorSkill } from "./learn";
@@ -10,6 +10,18 @@ import { log } from "./log";
 import { makeStarterPad, rmrf } from "./media";
 import { sub } from "./paths";
 import type { Store } from "./store";
+import {
+  EXIT_RESTART,
+  EXIT_UPDATE,
+  type LocalControl,
+  gitCommit,
+  lastUpdate,
+  markProgress,
+  readLocalControl,
+  requestUpdate,
+  supervisor,
+  writeLocalControl,
+} from "./supervisor";
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
@@ -41,10 +53,16 @@ export class Engine {
   private current?: string;
   private nextAutoRun?: string;
   private claudeOk?: boolean;
+  private control: LocalControl = readLocalControl();
+  private lastError?: string;
+  private intervalSeconds = 20;
+  private readonly startedAt = new Date().toISOString();
 
   constructor(
     private store: Store,
     private ai: Planner,
+    // How the worker leaves when the website asks for a restart or an update.
+    private exit: (code: number) => void = (code) => process.exit(code),
   ) {}
 
   async start(opts: { once?: boolean } = {}) {
@@ -59,6 +77,16 @@ export class Engine {
       let settings: Settings | null = null;
       try {
         settings = await this.store.getSettings();
+        this.intervalSeconds = settings.advanced.pollSeconds;
+        markProgress();
+        if (await this.applyControl()) return;
+        if (this.control.paused) {
+          this.nextAutoRun = undefined;
+          await this.beat("Paused from the website");
+          if (opts.once) return;
+          await sleep(this.intervalSeconds * 1000);
+          continue;
+        }
         await this.beat();
         await this.scheduleAuto(settings);
         const ran = await this.runNext(settings);
@@ -69,6 +97,7 @@ export class Engine {
         );
         if (opts.once) return;
       } catch (e) {
+        this.lastError = `${new Date().toISOString()} ${e instanceof Error ? e.message : String(e)}`;
         log("Loop error:", e instanceof Error ? e.message : String(e));
       }
       await sleep((settings?.advanced.pollSeconds ?? 20) * 1000);
@@ -79,7 +108,43 @@ export class Engine {
     this.claudeOk = ok;
   }
 
+  /**
+   * Applies a new request from the website (State/control.json): pause/resume,
+   * autostart on/off, restart, update. Returns true when the worker is leaving.
+   */
+  private async applyControl(): Promise<boolean> {
+    // Pick up changes made on the PC itself (desktop shortcuts) too.
+    this.control = readLocalControl();
+    const raw = await this.store.readState<unknown>("control", null);
+    const p = WorkerControl.safeParse(raw);
+    if (!p.success) return false;
+    const req = p.data;
+    const applied = this.control.appliedAt ? Date.parse(this.control.appliedAt) : 0;
+    if (!(Date.parse(req.requestedAt) > applied)) return false;
+    const next: LocalControl = {
+      autostart: req.autostart ?? this.control.autostart,
+      paused: req.paused ?? this.control.paused,
+      appliedAt: req.requestedAt,
+    };
+    writeLocalControl(next);
+    this.control = next;
+    log(`Website request: ${JSON.stringify(req)}`);
+    if (req.action === "update" || req.action === "restart") {
+      const sup = supervisor();
+      if (sup === "manual") {
+        await this.beat("Can't restart by itself: it was started by hand. Run the setup for autostart on the studio computer.");
+        return false;
+      }
+      if (req.action === "update") requestUpdate();
+      await this.beat(req.action === "update" ? "Updating to the latest version…" : "Restarting…");
+      this.exit(req.action === "update" ? EXIT_UPDATE : EXIT_RESTART);
+      return true;
+    }
+    return false;
+  }
+
   private async beat(message?: string) {
+    markProgress();
     await this.store
       .heartbeat({
         workerId: WORKER_ID,
@@ -92,6 +157,15 @@ export class Engine {
         claudeOk: this.claudeOk,
         nextAutoRun: this.nextAutoRun,
         message,
+        paused: this.control.paused,
+        autostart: this.control.autostart,
+        supervisor: supervisor(),
+        startedAt: this.startedAt,
+        commit: gitCommit(),
+        lastError: this.lastError,
+        lastUpdate: lastUpdate(),
+        controlAt: this.control.appliedAt,
+        intervalSeconds: this.intervalSeconds,
       })
       .catch((e) => log("Heartbeat failed:", String(e)));
   }
@@ -263,6 +337,7 @@ export class Engine {
         state.status = "failed";
         state.error = e instanceof Error ? e.message : String(e);
         state.stage = "Failed";
+        this.lastError = `${new Date().toISOString()} Job ${job.id}: ${state.error}`;
         log(`Job ${job.id} failed:`, state.error);
       }
       await save(true);

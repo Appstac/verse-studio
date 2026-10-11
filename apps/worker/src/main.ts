@@ -4,6 +4,7 @@ import { Engine } from "./engine";
 import type { Planner } from "./jobs";
 import { log } from "./log";
 import { DriveStore } from "./store";
+import { EXIT_ALREADY_RUNNING, claimSingleInstance } from "./supervisor";
 import { transcribeWav } from "./whisper";
 
 const planner: Planner = {
@@ -13,6 +14,11 @@ const planner: Planner = {
 };
 
 async function main() {
+  const lock = claimSingleInstance();
+  if (!lock.ok) {
+    log(`Another Verse Studio worker is already running on this computer (process ${lock.pid}). Not starting a second one.`);
+    process.exit(EXIT_ALREADY_RUNNING);
+  }
   const engine = new Engine(new DriveStore(), planner);
   claudeHealth().then((h) => {
     engine.setClaudeOk(h.ok);

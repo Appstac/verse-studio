@@ -231,8 +231,28 @@ export const Heartbeat = z.object({
   claudeOk: z.boolean().optional(),
   nextAutoRun: z.string().optional(),
   message: z.string().optional(),
+  // Added for the always-on service. All optional so older workers still parse.
+  paused: z.boolean().optional(),
+  autostart: z.boolean().optional(),
+  supervisor: z.enum(["windows", "launchd", "manual"]).optional(),
+  startedAt: z.string().optional(),
+  commit: z.string().optional(),
+  lastError: z.string().optional(),
+  lastUpdate: z.object({ at: z.string(), ok: z.boolean(), message: z.string() }).optional(),
+  controlAt: z.string().optional(),
+  intervalSeconds: z.number().optional(),
 });
 export type Heartbeat = z.infer<typeof Heartbeat>;
+
+// Written by the website to State/control.json; the worker applies a request once
+// (newer requestedAt than the last one it applied) and reports the result in its heartbeat.
+export const WorkerControl = z.object({
+  requestedAt: z.string(),
+  paused: z.boolean().optional(),
+  autostart: z.boolean().optional(),
+  action: z.enum(["restart", "update"]).optional(),
+});
+export type WorkerControl = z.infer<typeof WorkerControl>;
 
 export function newJobId(now = new Date()): string {
   const d = now.toISOString().replace(/[-:T]/g, "").slice(0, 14);

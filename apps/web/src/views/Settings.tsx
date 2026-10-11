@@ -4,6 +4,7 @@ import { useApp } from "../App";
 import * as g from "../google";
 import { PRESET_INFO } from "./Make";
 import { loadLearned, queueJob, saveLearned } from "../studio";
+import { StudioComputerSection } from "./StudioComputer";
 
 function Section({ title, desc, children }: { title: string; desc?: string; children: React.ReactNode }) {
   return (
@@ -178,6 +179,8 @@ export function SettingsView() {
         </button>
       </div>
       <div className="stack" style={{ gap: 22 }}>
+        <StudioComputerSection />
+
         <Section title="Auto mode" desc="The studio computer makes new reels every day on its own and puts them under Reels for you to download.">
           <label className="check">
             <input type="checkbox" checked={s.auto.enabled} onChange={(e) => set((x) => void (x.auto.enabled = e.target.checked))} />
