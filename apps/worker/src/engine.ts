@@ -4,7 +4,8 @@ import os from "node:os";
 import path from "node:path";
 import { type Job, type Settings, newJobId } from "../../../shared/schema";
 import { WORKER_ID, VERSION } from "./config";
-import { Cancelled, type Ctx, type Planner, runCarouselJob, runEditJob, runVerseJob } from "./jobs";
+import { Cancelled, type Ctx, type Planner, runCarouselJob, runEditJob, runReviseJob, runVerseJob } from "./jobs";
+import { learnIfNeeded, loadLearned, mirrorSkill } from "./learn";
 import { log } from "./log";
 import { makeStarterPad, rmrf } from "./media";
 import { sub } from "./paths";
@@ -50,6 +51,9 @@ export class Engine {
     await this.store.init();
     await this.recoverStuckJobs();
     await this.ensureStarterMusic();
+    // The learned style guide lives in Drive, so it comes back after a restart
+    // or on a new computer; refresh the local Claude Code skill copy too.
+    mirrorSkill(await loadLearned(this.store));
     log(`Verse Studio worker ${VERSION} running as "${WORKER_ID}". Waiting for jobs...`);
     for (;;) {
       let settings: Settings | null = null;
@@ -58,8 +62,12 @@ export class Engine {
         await this.beat();
         await this.scheduleAuto(settings);
         const ran = await this.runNext(settings);
-        if (opts.once && !ran) return;
         if (ran) continue;
+        // Idle: fold any new ratings and notes into the style guide.
+        await learnIfNeeded(this.store, this.ai, settings.advanced.claudeModel || undefined).catch((e) =>
+          log("Learning failed (will retry):", e instanceof Error ? e.message : String(e)),
+        );
+        if (opts.once) return;
       } catch (e) {
         log("Loop error:", e instanceof Error ? e.message : String(e));
       }
@@ -228,8 +236,17 @@ export class Engine {
     await this.beat();
     const pulse = setInterval(() => void this.beat(), 60000);
     try {
-      const outputs =
-        job.request.type === "verse" ? await runVerseJob(ctx) : job.request.type === "edit" ? await runEditJob(ctx) : await runCarouselJob(ctx);
+      await loadLearned(this.store);
+      const t = job.request.type;
+      let outputs: Job["outputs"] = [];
+      if (t === "verse") outputs = await runVerseJob(ctx);
+      else if (t === "edit") outputs = await runEditJob(ctx);
+      else if (t === "carousel") outputs = await runCarouselJob(ctx);
+      else if (t === "revise") outputs = await runReviseJob(ctx);
+      else if (t === "learn") {
+        await ctx.update({ stage: "Reading your ratings and notes", progress: 0.3 });
+        await learnIfNeeded(this.store, this.ai, settings.advanced.claudeModel || undefined, true);
+      }
       state.outputs = outputs;
       const review = job.source === "auto" && settings.auto.approval === "review";
       state.status = review ? "review" : "done";

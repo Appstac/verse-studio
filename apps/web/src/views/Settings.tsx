@@ -3,6 +3,7 @@ import { PRESETS, type Preset, type Settings } from "@shared/schema";
 import { useApp } from "../App";
 import * as g from "../google";
 import { PRESET_INFO } from "./Make";
+import { loadLearned, queueJob, saveLearned } from "../studio";
 
 function Section({ title, desc, children }: { title: string; desc?: string; children: React.ReactNode }) {
   return (
@@ -63,6 +64,74 @@ function LogoField({ s, set }: { s: Settings; set: (f: (s: Settings) => void) =>
       </div>
       <small>Shown next to the signature and on the closing card. A square PNG works best.</small>
     </div>
+  );
+}
+
+function LearnedSection() {
+  const { studio, toast, refresh } = useApp();
+  const [doc, setDoc] = useState<{ id?: string; text: string } | null>(null);
+  const [text, setText] = useState("");
+  const [busy, setBusy] = useState(false);
+  useEffect(() => {
+    loadLearned(studio.folders)
+      .then((d) => {
+        setDoc(d);
+        setText(d.text);
+      })
+      .catch(() => setDoc({ text: "" }));
+  }, [studio.folders]);
+  const ratings = [...studio.feedback.values()].filter((x) => x.fb.rating);
+  const avg = ratings.length ? (ratings.reduce((a, x) => a + (x.fb.rating ?? 0), 0) / ratings.length).toFixed(1) : null;
+  return (
+    <Section
+      title="What the studio has learned"
+      desc="Built from your ratings, notes and remembered change requests. Every new video follows it. It's saved in your Google Drive, so it survives restarts and new computers."
+    >
+      <p className="hint">
+        {studio.feedback.size} feedback item{studio.feedback.size === 1 ? "" : "s"}
+        {avg ? `, average rating ${avg}★` : ""}. New feedback is folded in automatically when the studio computer is idle.
+      </p>
+      {doc === null ? (
+        <p className="hint">Loading…</p>
+      ) : (
+        <textarea
+          className="learned"
+          value={text}
+          onChange={(e) => setText(e.target.value)}
+          placeholder="Nothing learned yet. Rate a few videos under Reels, or write your own rules here, e.g. Hooks: short questions. Never use the Bold look."
+          aria-label="Learned style guide"
+        />
+      )}
+      <div className="row">
+        <button
+          className="btn small primary"
+          disabled={busy || doc === null || text === doc.text}
+          onClick={async () => {
+            setBusy(true);
+            try {
+              await saveLearned(studio.folders, text, doc?.id);
+              setDoc({ id: doc?.id, text });
+              toast("Saved. New videos will follow it.");
+            } finally {
+              setBusy(false);
+            }
+          }}
+        >
+          Save my edits
+        </button>
+        <button
+          className="btn small"
+          disabled={!studio.feedback.size}
+          onClick={async () => {
+            await queueJob(studio.folders, { type: "learn" });
+            toast("Relearning from all your feedback");
+            void refresh();
+          }}
+        >
+          Relearn now
+        </button>
+      </div>
+    </Section>
   );
 }
 
@@ -265,13 +334,21 @@ export function SettingsView() {
           <div className="field">
             <span>On-video captions for edited clips</span>
             <div className="seg" role="group" aria-label="Caption style">
-              {(["karaoke", "lines", "none"] as const).map((v) => (
+              {(["pop", "karaoke", "lines", "none"] as const).map((v) => (
                 <button key={v} type="button" aria-pressed={s.captions.onVideoStyle === v} onClick={() => set((x) => void (x.captions.onVideoStyle = v))}>
-                  {v === "karaoke" ? "Word by word" : v === "lines" ? "Whole lines" : "None"}
+                  {v === "pop" ? "Big pop-up words" : v === "karaoke" ? "Word by word" : v === "lines" ? "Whole lines" : "None"}
                 </button>
               ))}
             </div>
           </div>
+          <label className="check">
+            <input type="checkbox" checked={s.captions.soundEffects} onChange={(e) => set((x) => void (x.captions.soundEffects = e.target.checked))} />
+            <span>
+              Sound effects on edits
+              <br />
+              <small className="hint">Soft whooshes on scene changes and a pop when a photo card appears. Skipped for worship videos.</small>
+            </span>
+          </label>
         </Section>
 
         <Section title="Sound versions" desc="Each reel comes in these versions so you can pick whichever fits when you post.">
@@ -305,6 +382,8 @@ export function SettingsView() {
             </label>
           </div>
         </Section>
+
+        <LearnedSection />
 
         <Section title="Advanced">
           <div className="grid2">

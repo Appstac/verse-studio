@@ -221,6 +221,20 @@ export async function writeJson(data: unknown, opts: { id?: string; parent?: str
   return j.id;
 }
 
+export async function writeText(text: string, opts: { id?: string; parent?: string; name?: string }): Promise<string> {
+  if (opts.id) {
+    await api(`${UPLOAD}/files/${opts.id}?uploadType=media`, { method: "PATCH", headers: { "Content-Type": "text/markdown" }, body: text });
+    return opts.id;
+  }
+  const boundary = "vs" + Math.random().toString(36).slice(2);
+  const meta = JSON.stringify({ name: opts.name, parents: [opts.parent], mimeType: "text/markdown" });
+  const multipart = `--${boundary}\r\nContent-Type: application/json; charset=UTF-8\r\n\r\n${meta}\r\n--${boundary}\r\nContent-Type: text/markdown; charset=UTF-8\r\n\r\n${text}\r\n--${boundary}--`;
+  const j = await (
+    await api(`${UPLOAD}/files?uploadType=multipart&fields=id`, { method: "POST", headers: { "Content-Type": `multipart/related; boundary=${boundary}` }, body: multipart })
+  ).json();
+  return j.id;
+}
+
 // Resumable upload with progress, for big phone videos.
 export async function uploadFile(file: File, parent: string, onProgress?: (p: number) => void): Promise<string> {
   const t = await accessToken();

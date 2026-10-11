@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from "react";
 import type { AudioVariant, Job, OutputItem } from "@shared/schema";
 import { useApp } from "../App";
+import { ReviewTools } from "./Review";
 import * as g from "../google";
 import { cancelJob, queueJob, removeJob, setJobStatus, workerOnline, type JobEntry } from "../studio";
 
@@ -13,6 +14,8 @@ const VARIANT_LABEL: Record<AudioVariant, string> = {
 
 function describe(job: Job) {
   const r = job.request;
+  if (r.type === "revise") return `New version of “${r.sourceTitle || "a reel"}”${r.instruction ? `: “${r.instruction.slice(0, 60)}${r.instruction.length > 60 ? "…" : ""}”` : ""}`;
+  if (r.type === "learn") return "Learning from your feedback";
   if (r.type === "verse") return `${r.count} verse reel${r.count > 1 ? "s" : ""}${r.theme ? `: ${r.theme}` : ""}`;
   if (r.type === "carousel") return `Carousel${r.topic ? `: ${r.topic}` : ""}`;
   return `Edit of ${r.inputFileIds.length} upload${r.inputFileIds.length > 1 ? "s" : ""}${r.prompt ? `: “${r.prompt.slice(0, 60)}${r.prompt.length > 60 ? "…" : ""}”` : ""}`;
@@ -41,7 +44,7 @@ async function copyCaption(o: OutputItem, toast: (m: string) => void) {
   }
 }
 
-function ReelCard({ o, auto }: { o: OutputItem; auto: boolean }) {
+function ReelCard({ o, auto, job }: { o: OutputItem; auto: boolean; job: Job }) {
   const { toast } = useApp();
   const [variant, setVariant] = useState<AudioVariant>(o.variants[0]?.label ?? "silent");
   const [playing, setPlaying] = useState(false);
@@ -73,7 +76,11 @@ function ReelCard({ o, auto }: { o: OutputItem; auto: boolean }) {
         )}
         {o.needsReview ? <span className="badge">Check text</span> : auto ? <span className="badge" style={{ background: "#fff" }}>Auto</span> : null}
       </div>
-      <h3>{o.title}</h3>
+      <h3>
+        {o.title}
+        {o.version > 1 ? <span className="pill" style={{ marginLeft: 8, verticalAlign: "middle" }}>v{o.version}</span> : null}
+      </h3>
+      {o.changeNote ? <p className="hint" style={{ marginTop: -8 }}>Changed: {o.changeNote}</p> : null}
       {o.reference ? <p className="muted" style={{ fontSize: 14, marginTop: -8 }}>{o.reference}</p> : null}
       {o.needsReview && o.reviewNote ? <p className="notice warn" style={{ fontSize: 14 }}>{o.reviewNote}</p> : null}
       {o.variants.length > 1 ? (
@@ -107,6 +114,7 @@ function ReelCard({ o, auto }: { o: OutputItem; auto: boolean }) {
           Copy caption
         </button>
       </div>
+      <ReviewTools job={job} o={o} />
     </article>
   );
 }
@@ -116,7 +124,7 @@ function SlideImg({ id }: { id: string }) {
   return <div className="phone slide">{url ? <img src={url} alt="" /> : null}</div>;
 }
 
-function CarouselCard({ o }: { o: OutputItem }) {
+function CarouselCard({ o, job }: { o: OutputItem; job: Job }) {
   const { toast } = useApp();
   const [busy, setBusy] = useState(false);
   return (
@@ -150,6 +158,7 @@ function CarouselCard({ o }: { o: OutputItem }) {
           Copy caption
         </button>
       </div>
+      <ReviewTools job={job} o={o} />
     </article>
   );
 }
@@ -223,7 +232,7 @@ export function Today() {
   const failed = studio.jobs.filter((e) => e.job.status === "failed").slice(0, 5);
   const review = studio.jobs.filter((e) => e.job.status === "review");
   const done = studio.jobs.filter((e) => e.job.status === "done" || e.job.status === "review" || (e.job.status === "working" && e.job.outputs.length));
-  const items = done.flatMap((e) => e.job.outputs.map((o) => ({ o, auto: e.job.source === "auto", key: `${e.job.id}-${o.title}-${o.coverFileId}` })));
+  const items = done.flatMap((e) => e.job.outputs.map((o) => ({ o, job: e.job, auto: e.job.source === "auto", key: `${e.job.id}-${o.title}-${o.coverFileId}` })));
 
   return (
     <>
@@ -295,7 +304,7 @@ export function Today() {
       ) : (
         <>
           <div className="reels">
-            {items.slice(0, limit).map(({ o, auto, key }) => (o.kind === "carousel" ? <CarouselCard key={key} o={o} /> : <ReelCard key={key} o={o} auto={auto} />))}
+            {items.slice(0, limit).map(({ o, job, auto, key }) => (o.kind === "carousel" ? <CarouselCard key={key} o={o} job={job} /> : <ReelCard key={key} o={o} auto={auto} job={job} />))}
           </div>
           {items.length > limit ? (
             <div style={{ marginTop: 24 }}>

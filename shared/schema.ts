@@ -93,7 +93,8 @@ export const Settings = z.object({
       alwaysHashtags: z.array(z.string()).default(["#jesuschrist", "#faith"]),
       cta: z.string().default("Type AMEN if this is for you"),
       tone: z.string().default("warm, gentle, encouraging, sincere, never preachy"),
-      onVideoStyle: z.enum(["karaoke", "lines", "none"]).default("karaoke"),
+      onVideoStyle: z.enum(["pop", "karaoke", "lines", "none"]).default("pop"),
+      soundEffects: z.boolean().default(true),
     })
     .prefault({}),
   reel: z
@@ -139,6 +140,7 @@ export const EditRequest = z.object({
   captions: z.boolean().default(true),
   captionLanguage: z.enum(["auto", "en", "te"]).default("auto"),
   keepOriginalAudio: z.boolean().default(true),
+  alsoCarousel: z.boolean().default(false),
 });
 export const CarouselRequest = z.object({
   type: z.literal("carousel"),
@@ -147,7 +149,31 @@ export const CarouselRequest = z.object({
   language: Language.default("english"),
   preset: z.union([Preset, z.literal("auto")]).default("auto"),
 });
-export const JobRequest = z.discriminatedUnion("type", [VerseRequest, EditRequest, CarouselRequest]);
+// Changes to an existing output. Direct fields are applied as-is (fast, no AI);
+// "instruction" is a plain-language change that Claude applies.
+export const ReviseChanges = z.object({
+  hook: z.string().optional(),
+  verseText: z.string().optional(),
+  reference: z.string().optional(),
+  preset: Preset.optional(),
+  speed: z.enum(["slower", "normal", "faster"]).optional(),
+  caption: z.string().optional(),
+  captions: z.enum(["on", "off"]).optional(),
+  layout: z.enum(["fill", "blur-pad"]).optional(),
+  slides: z.array(z.object({ title: z.string(), body: z.string() })).optional(),
+});
+export type ReviseChanges = z.infer<typeof ReviseChanges>;
+export const ReviseRequest = z.object({
+  type: z.literal("revise"),
+  sourceJobId: z.string(),
+  sourceTitle: z.string().default(""),
+  specFileId: z.string(),
+  changes: ReviseChanges.default({}),
+  instruction: z.string().default(""),
+  remember: z.boolean().default(false),
+});
+export const LearnRequest = z.object({ type: z.literal("learn") });
+export const JobRequest = z.discriminatedUnion("type", [VerseRequest, EditRequest, CarouselRequest, ReviseRequest, LearnRequest]);
 export type JobRequest = z.infer<typeof JobRequest>;
 
 export const JobStatus = z.enum(["queued", "working", "review", "done", "failed", "cancelled"]);
@@ -166,6 +192,11 @@ export const OutputItem = z.object({
   coverFileId: z.string().optional(),
   slideFileIds: z.array(z.string()).default([]),
   folderId: z.string().optional(),
+  specFileId: z.string().optional(),
+  source: z.enum(["verse", "edit", "carousel"]).optional(),
+  version: z.number().int().default(1),
+  revisionOf: z.string().optional(),
+  changeNote: z.string().optional(),
 });
 export type OutputItem = z.infer<typeof OutputItem>;
 
@@ -216,4 +247,29 @@ export const SUBFOLDERS = [
   "Brand",
   "Backgrounds",
   "State",
+  "Feedback",
 ] as const;
+
+// One file per rating in Feedback/ (written by the website, never edited by
+// the worker, so there are no write races).
+export const FEEDBACK_TAGS = {
+  good: ["Great hook", "Love the look", "Good pacing", "Caption is spot on", "Good verse choice", "Good cuts", "Captions look great"],
+  bad: ["Hook is weak", "Too slow", "Too fast", "Text too small", "Hard to read", "Wrong verse for the theme", "Caption too long", "Bad cut", "Music doesn't fit", "Captions wrong"],
+} as const;
+export const Feedback = z.object({
+  id: z.string(),
+  createdAt: z.string(),
+  jobId: z.string(),
+  outputKey: z.string(),
+  title: z.string(),
+  source: z.enum(["verse", "edit", "carousel"]).optional(),
+  preset: z.string().optional(),
+  rating: z.number().int().min(1).max(5).optional(),
+  tags: z.array(z.string()).default([]),
+  note: z.string().default(""),
+  remember: z.boolean().default(true),
+});
+export type Feedback = z.infer<typeof Feedback>;
+
+export const LEARNED_FILE = "Learned style.md";
+export const outputKey = (jobId: string, o: { coverFileId?: string; title: string }) => `${jobId}:${o.coverFileId ?? o.title}`;

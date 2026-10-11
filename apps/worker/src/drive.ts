@@ -97,6 +97,25 @@ export async function readJson<T = unknown>(fileId: string): Promise<T> {
   return JSON.parse(body) as T;
 }
 
+export async function readText(fileId: string): Promise<string> {
+  const res = await drive().files.get({ fileId, alt: "media" }, { responseType: "text" });
+  return typeof res.data === "string" ? res.data : JSON.stringify(res.data);
+}
+
+export async function writeText(text: string, opts: { fileId?: string; parentId?: string; name?: string }) {
+  const media = { mimeType: "text/markdown", body: text };
+  if (opts.fileId) {
+    await drive().files.update({ fileId: opts.fileId, media });
+    return opts.fileId;
+  }
+  const res = await drive().files.create({
+    requestBody: { name: opts.name, parents: opts.parentId ? [opts.parentId] : undefined, mimeType: "text/markdown" },
+    media,
+    fields: "id",
+  });
+  return res.data.id!;
+}
+
 export async function writeJson(data: unknown, opts: { fileId?: string; parentId?: string; name?: string }) {
   const media = { mimeType: "application/json", body: JSON.stringify(data, null, 2) };
   if (opts.fileId) {

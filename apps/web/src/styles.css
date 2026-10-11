@@ -75,7 +75,7 @@ button, input, select, textarea { font: inherit; color: inherit; }
   .rail { display: none; }
   .main { padding-top: 20px; }
   .tabbar {
-    display: grid; grid-template-columns: repeat(4, 1fr); position: fixed; inset: auto 0 0 0; z-index: 20;
+    display: grid; grid-template-columns: repeat(5, 1fr); position: fixed; inset: auto 0 0 0; z-index: 20;
     background: var(--surface); border-top: 1px solid var(--line); padding: 6px 6px calc(6px + env(safe-area-inset-bottom));
   }
   .tabbar .navbtn { flex-direction: column; gap: 2px; font-size: 12px; justify-content: center; padding: 8px 4px; }
@@ -193,3 +193,17 @@ input[type="range"] { width: 100%; accent-color: var(--gold); }
   border-radius: 999px; font-weight: 600; z-index: 50; max-width: 90vw; text-align: center;
 }
 @media (prefers-reduced-motion: reduce) { * { transition: none !important; animation: none !important; } }
+
+/* ---------- review tools ---------- */
+.review { display: flex; flex-direction: column; gap: 10px; }
+.drawer { border: 1px solid var(--line); border-radius: var(--radius-m); padding: 14px; background: var(--surface); }
+.stars { display: flex; gap: 2px; }
+.stars button { border: 0; background: none; font-size: 30px; line-height: 1; color: var(--line); cursor: pointer; padding: 2px; }
+.stars button.on { color: var(--gold); }
+.chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.chip { border: 1px solid var(--line); background: var(--surface); border-radius: 999px; padding: 5px 11px; font-size: 13px; font-weight: 600; cursor: pointer; color: var(--muted); }
+.chip:hover { color: var(--ink); border-color: var(--muted); }
+.chip.on { background: var(--ink); color: var(--bg); border-color: var(--ink); }
+.chip.good.on { background: var(--sage); border-color: var(--sage); color: #fff; }
+.chip.bad.on { background: var(--rose); border-color: var(--rose); color: #fff; }
+.learned { font-family: var(--serif); white-space: pre-wrap; line-height: 1.6; min-height: 260px; }

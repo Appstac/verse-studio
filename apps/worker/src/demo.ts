@@ -12,8 +12,27 @@ import { LocalStore } from "./store";
 const root = path.resolve(process.argv[2] ?? path.join(process.cwd(), "demo-output"));
 fs.mkdirSync(root, { recursive: true });
 
-const mock: Planner = {
-  async plan(kind) {
+export const mock: Planner = {
+  async plan(kind, prompt) {
+    if (kind === "learn") {
+      return { guide: "## Hooks\n- Short questions under 7 words.\n\n## Looks and pacing\n- Prefer Night sky. Avoid Bold.", changes: "First version." } as never;
+    }
+    if (kind === "revise" && prompt.includes("verse reel")) {
+      return {
+        hook: "Are you tired of carrying it alone?",
+        reference: "Isaiah 41:10",
+        teluguText: "",
+        teluguReference: "",
+        preset: "night",
+        speed: "slower",
+        emphasis: ["strengthen"],
+        caption: "He is holding you, even now.\n\nType AMEN 🙏",
+        hashtags: ["#faith", "#jesuschrist"],
+        note: "Hook turned into a question, night look, slower reveal.",
+      } as never;
+    }
+    if (kind === "revise" && prompt.includes("carousel")) kind = "carousel";
+    if (kind === "revise") kind = "edit";
     if (kind === "verse") {
       return {
         items: [
@@ -68,10 +87,14 @@ const mock: Planner = {
       segments: [
         { clip: 0, start: 0.5, end: 3.5, zoom: "in", speed: 1, textOverlay: "" },
         { clip: 1, start: 1, end: 4, zoom: "none", speed: 1, textOverlay: "" },
-        { clip: 0, start: 4, end: 6.5, zoom: "out", speed: 1, textOverlay: "" },
+        { clip: 0, start: 4, end: 6.5, zoom: "punch", speed: 1, textOverlay: "" },
       ],
       transition: "fade",
       layout: "blur-pad",
+      style: "talking-head",
+      emphasis: ["lord", "worthy"],
+      overlays: [{ clip: 2, at: 2, duration: 2.5, position: "top" }],
+      cta: "Type AMEN if you were blessed",
       captionLanguage: "english",
       showCaptions: true,
       mood: "worship",
@@ -102,6 +125,7 @@ async function main() {
   // Two synthetic "phone clips": one landscape with a tone, one vertical.
   if (!fs.existsSync(path.join(up, "clip-a.mp4"))) {
     await ffmpeg(["-f", "lavfi", "-i", "testsrc2=s=1920x1080:r=30:d=8", "-f", "lavfi", "-i", "sine=f=330:d=8", "-shortest", "-c:v", "libx264", "-pix_fmt", "yuv420p", "-c:a", "aac", path.join(up, "clip-a.mp4")]);
+    await ffmpeg(["-f", "lavfi", "-i", "mandelbrot=s=1200x900", "-frames:v", "1", path.join(up, "photo.png")]);
     await ffmpeg(["-f", "lavfi", "-i", "smptehdbars=s=1080x1920:r=30:d=6", "-f", "lavfi", "-i", "sine=f=440:d=6", "-shortest", "-c:v", "libx264", "-pix_fmt", "yuv420p", "-c:a", "aac", path.join(up, "clip-b.mp4")]);
   }
   const ts = new Date().toISOString();
@@ -114,14 +138,15 @@ async function main() {
       id: newJobId(),
       request: {
         type: "edit",
-        inputFileIds: ["Uploads/clip-a.mp4", "Uploads/clip-b.mp4"],
-        inputNames: ["clip-a.mp4", "clip-b.mp4"],
+        inputFileIds: ["Uploads/clip-a.mp4", "Uploads/clip-b.mp4", "Uploads/photo.png"],
+        inputNames: ["clip-a.mp4", "clip-b.mp4", "photo.png"],
         prompt: "Short worship montage",
         targetSeconds: 10,
         layout: "auto",
         captions: true,
         captionLanguage: "auto",
         keepOriginalAudio: true,
+        alsoCarousel: true,
       },
     },
   ];
@@ -134,7 +159,7 @@ async function main() {
   process.exit(0);
 }
 
-main().catch((e) => {
+if (process.argv[1]?.endsWith("demo.ts")) main().catch((e) => {
   console.error(e);
   process.exit(1);
 });

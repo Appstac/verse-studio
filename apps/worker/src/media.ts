@@ -200,3 +200,25 @@ export function rmrf(p: string) {
     /* ignore */
   }
 }
+
+// Soft transition sounds, generated locally so there is nothing to license.
+export async function makeSfx(dir: string) {
+  fs.mkdirSync(dir, { recursive: true });
+  const whoosh = path.join(dir, "whoosh.mp3");
+  const pop = path.join(dir, "pop.mp3");
+  if (!fs.existsSync(whoosh)) {
+    await ffmpeg([
+      "-f", "lavfi", "-i", "anoisesrc=d=0.55:c=pink:a=0.6",
+      "-af", "highpass=f=400,lowpass=f=5000,afade=t=in:d=0.25,afade=t=out:st=0.28:d=0.27,volume=0.9,aformat=channel_layouts=stereo",
+      "-ar", "48000", "-c:a", "libmp3lame", "-b:a", "160k", whoosh,
+    ]);
+  }
+  if (!fs.existsSync(pop)) {
+    await ffmpeg([
+      "-f", "lavfi", "-i", "sine=f=880:d=0.12",
+      "-af", "volume=0.8,afade=t=out:st=0.03:d=0.09,aformat=channel_layouts=stereo",
+      "-ar", "48000", "-c:a", "libmp3lame", "-b:a", "160k", pop,
+    ]);
+  }
+  return { whoosh, pop };
+}

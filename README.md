@@ -17,6 +17,16 @@ Setup takes about 45 minutes: see **[docs/SETUP.md](docs/SETUP.md)**.
 | Carousels (4:5) | Cover, body slides and a call-to-action slide, with exact scripture inserted, as PNGs ready to post. |
 | Auto mode | N reels per day and N carousels per week at a set time, mixed English/Telugu, with optional approval before they show as ready. |
 
+## Review, quick changes and learning
+
+- Every reel and carousel has **Rate** (1–5 stars, quick tags, a note) and **Change**. Change takes a plain-language request that Claude applies ("make the hook a question", "keep the whole chorus"), or direct edits that need no AI: hook, verse text, slide text, look, pace, captions, framing, Instagram caption. The result is a new version (v2, v3…) next to the original.
+- Each output saves a small `*-spec.json` beside it in Drive, so changes work days later and after restarts.
+- Ratings, notes and change requests marked "remember" are folded into **`Verse Studio/Learned style.md`** in Drive whenever the studio computer is idle. Every new job reads it. It also appears in Settings → *What the studio has learned*, where it can be edited by hand, and is mirrored to `~/.claude/skills/verse-studio-style/SKILL.md` on the studio computer.
+
+## Talking-head edits
+
+Edits of someone speaking to camera follow the fast creator style: best take kept from repeated takes, pauses over ~0.35 s removed, big pop-up captions with key words in a gold script font, alternating punch-in zooms on jump cuts, photos/screenshots floated in as tilted cards, soft whoosh and pop sounds, and an end card with a call to action. Optionally the same video also becomes a matching carousel.
+
 ## Commands (repo root)
 
 ```bash

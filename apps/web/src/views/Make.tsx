@@ -1,4 +1,4 @@
-import React, { useRef, useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import { PRESETS, type Language, type Preset } from "@shared/schema";
 import { useApp } from "../App";
 import * as g from "../google";
@@ -133,6 +133,7 @@ function EditForm() {
   const [captions, setCaptions] = useState(true);
   const [capLang, setCapLang] = useState<"auto" | "en" | "te">("auto");
   const [keepAudio, setKeepAudio] = useState(true);
+  const [alsoCarousel, setAlsoCarousel] = useState(false);
   const [busy, setBusy] = useState(false);
   const ready = uploads.filter((u) => u.fileId);
   const uploading = uploads.some((u) => !u.fileId && !u.error);
@@ -154,6 +155,7 @@ function EditForm() {
             captions,
             captionLanguage: capLang,
             keepOriginalAudio: keepAudio,
+            alsoCarousel,
           });
           toast("Queued. It will appear under Reels when it's ready.");
           void refresh();
@@ -173,7 +175,10 @@ function EditForm() {
           onChange={(e) => setPrompt(e.target.value)}
           placeholder="e.g. A 30 second reel of our Christmas carols. Start with the kids singing Podamu podamu, keep the whole chorus, end on the group shot."
         />
-        <small>Claude watches the clips and listens to the singing before deciding the cuts.</small>
+        <small>
+          Claude watches the clips and listens before deciding the cuts. Talking to camera? Film the line as many times as you like: it keeps the best take,
+          cuts the pauses, adds big captions and punch-in zooms. Add photos or screenshots and it floats them in as cards where they fit.
+        </small>
       </label>
       <label className="field">
         <span>Length: about {seconds} seconds</span>
@@ -197,6 +202,14 @@ function EditForm() {
           Keep the original sound (singing, speech)
           <br />
           <small className="hint">Music versions are mixed quietly underneath it.</small>
+        </span>
+      </label>
+      <label className="check">
+        <input type="checkbox" checked={alsoCarousel} onChange={(e) => setAlsoCarousel(e.target.checked)} />
+        <span>
+          Also make a matching carousel from this video
+          <br />
+          <small className="hint">Same message, second format: the key points as swipeable slides.</small>
         </span>
       </label>
       <div className="row">
@@ -342,8 +355,9 @@ function CarouselForm() {
   );
 }
 
-export function Make() {
-  const [mode, setMode] = useState<Mode>("verse");
+export function Make({ initial = "verse" }: { initial?: Mode }) {
+  const [mode, setMode] = useState<Mode>(initial);
+  useEffect(() => setMode(initial), [initial]);
   return (
     <>
       <div className="pagehead">

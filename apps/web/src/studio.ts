@@ -1,3 +1,4 @@
+import { Feedback, LEARNED_FILE, outputKey, type OutputItem, type ReviseChanges } from "@shared/schema";
 // App data: settings, jobs and worker status, all read from Drive.
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Heartbeat, Job, JobRequest, Settings, defaultSettings, newJobId } from "@shared/schema";
@@ -14,6 +15,7 @@ export interface Studio {
   settingsId?: string;
   jobs: JobEntry[];
   worker: Heartbeat | null;
+  feedback: Map<string, { fileId: string; fb: Feedback }>;
 }
 
 export async function loadSettings(f: g.Folders): Promise<{ settings: Settings; id?: string }> {
@@ -96,8 +98,13 @@ export function useStudio(enabled: boolean) {
     try {
       if (!foldersRef.current) foldersRef.current = await g.ensureFolders();
       const f = foldersRef.current;
-      const [{ settings, id }, jobs, worker] = await Promise.all([loadSettings(f), loadJobs(f), loadWorker(f)]);
-      setStudio({ folders: f, settings, settingsId: id, jobs, worker });
+      const [{ settings, id }, jobs, worker, feedback] = await Promise.all([
+        loadSettings(f),
+        loadJobs(f),
+        loadWorker(f),
+        loadFeedback(f).catch(() => new Map()),
+      ]);
+      setStudio({ folders: f, settings, settingsId: id, jobs, worker, feedback });
       setError(null);
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
@@ -124,4 +131,66 @@ export function useStudio(enabled: boolean) {
   );
 
   return { studio, error, refresh, saveSettings };
+}
+
+// ---------------------------------------------------------------------------
+// Feedback and revisions
+
+
+export async function loadFeedback(f: g.Folders): Promise<Map<string, { fileId: string; fb: Feedback }>> {
+  const files = await g.children(f.Feedback, "mimeType='application/json'", { orderBy: "createdTime desc", pageSize: 200 });
+  const out = new Map<string, { fileId: string; fb: Feedback }>();
+  await Promise.all(
+    files.map(async (file) => {
+      try {
+        const p = Feedback.safeParse(await g.readJson(file.id));
+        if (p.success && !out.has(p.data.outputKey)) out.set(p.data.outputKey, { fileId: file.id, fb: p.data });
+      } catch {
+        /* skip */
+      }
+    }),
+  );
+  return out;
+}
+
+export async function saveFeedback(
+  f: g.Folders,
+  job: Job,
+  o: OutputItem,
+  data: { rating?: number; tags: string[]; note: string; remember: boolean; preset?: string },
+  existingFileId?: string,
+) {
+  const fb: Feedback = {
+    id: `${job.id}-${Math.random().toString(36).slice(2, 6)}`,
+    createdAt: new Date().toISOString(),
+    jobId: job.id,
+    outputKey: outputKey(job.id, o),
+    title: o.title,
+    source: o.source ?? (job.request.type === "revise" ? undefined : (job.request.type as "verse" | "edit" | "carousel")),
+    preset: data.preset,
+    rating: data.rating,
+    tags: data.tags,
+    note: data.note,
+    remember: data.remember,
+  };
+  return g.writeJson(fb, existingFileId ? { id: existingFileId } : { parent: f.Feedback, name: `${fb.id}.json` });
+}
+
+export async function queueRevision(f: g.Folders, job: Job, o: OutputItem, changes: ReviseChanges, instruction: string, remember: boolean) {
+  if (!o.specFileId) throw new Error("This video was made before quick changes existed. Make a new one to use them.");
+  return queueJob(f, { type: "revise", sourceJobId: job.id, sourceTitle: o.title, specFileId: o.specFileId, changes, instruction, remember });
+}
+
+export async function loadSpec(id: string): Promise<Record<string, any>> {
+  return g.readJson(id);
+}
+
+export async function loadLearned(f: g.Folders): Promise<{ id?: string; text: string }> {
+  const file = await g.findChild(f.root, LEARNED_FILE);
+  if (!file) return { text: "" };
+  return { id: file.id, text: await (await g.blob(file.id)).text() };
+}
+
+export async function saveLearned(f: g.Folders, text: string, id?: string) {
+  await g.writeText(text, id ? { id } : { parent: f.root, name: LEARNED_FILE });
 }

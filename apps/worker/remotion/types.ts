@@ -61,15 +61,27 @@ export type ClipSegment = {
   start: number; // seconds in source
   end: number; // seconds in source
   playbackRate: number;
-  zoom: "none" | "in" | "out";
+  zoom: "none" | "in" | "out" | "punch";
   layout: "fill" | "blur-pad";
   textOverlay?: string;
 }
 
+export type Overlay = {
+  src: string;
+  type: "image" | "video";
+  at: number; // seconds on the output timeline
+  duration: number;
+  position: "top" | "center" | "corner";
+  aspect: number; // width / height
+};
+
 export type ClipEditProps = {
   segments: ClipSegment[];
   transition: "cut" | "fade";
-  captions: { words: CaptionWord[]; style: "karaoke" | "lines" | "none"; language: Lang };
+  captions: { words: CaptionWord[]; style: "pop" | "karaoke" | "lines" | "none"; language: Lang; emphasis?: string[] };
+  overlays?: Overlay[];
+  sfx?: { whoosh?: string; pop?: string };
+  cta?: string;
   hook?: string;
   brand: BrandProps;
   keepAudio: boolean;

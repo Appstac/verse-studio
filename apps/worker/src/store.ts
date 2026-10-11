@@ -2,7 +2,7 @@
 // same folder layout on disk for offline testing (npm run demo).
 import fs from "node:fs";
 import path from "node:path";
-import { Heartbeat, Job, Settings, defaultSettings } from "../../../shared/schema";
+import { Feedback, Heartbeat, Job, LEARNED_FILE, Settings, defaultSettings } from "../../../shared/schema";
 import * as d from "./drive";
 import { isAudioName, isImageName, isVideoName } from "./media";
 
@@ -31,6 +31,11 @@ export interface Store {
   heartbeat(hb: Heartbeat): Promise<void>;
   addLibraryMusic(local: string, mood: string): Promise<void>;
   isCancelRequested(jobId: string): Promise<boolean>;
+  saveSpec(spec: unknown, folderId: string, name: string): Promise<string>;
+  readSpec<T>(fileId: string): Promise<T>;
+  listFeedback(): Promise<Array<Feedback & { modified: string }>>;
+  readLearned(): Promise<string>;
+  writeLearned(text: string): Promise<void>;
 }
 
 export class DriveStore implements Store {
@@ -150,6 +155,41 @@ export class DriveStore implements Store {
   async isCancelRequested(jobId: string) {
     return !!(await d.findChild(this.f.Jobs, `${jobId}.cancel`));
   }
+
+  saveSpec(spec: unknown, folderId: string, name: string) {
+    return d.writeJson(spec, { parentId: folderId, name });
+  }
+
+  readSpec<T>(fileId: string) {
+    return d.readJson<T>(fileId);
+  }
+
+  private fbCache = new Map<string, { modified: string; fb: Feedback | null }>();
+  async listFeedback() {
+    const files = await d.listFiles(this.f.Feedback, "mimeType='application/json'");
+    const out: Array<Feedback & { modified: string }> = [];
+    for (const f of files) {
+      const c = this.fbCache.get(f.id!);
+      let fb = c && c.modified === f.modifiedTime ? c.fb : undefined;
+      if (fb === undefined) {
+        const p = Feedback.safeParse(await d.readJson(f.id!).catch(() => null));
+        fb = p.success ? p.data : null;
+        this.fbCache.set(f.id!, { modified: f.modifiedTime ?? "", fb });
+      }
+      if (fb) out.push({ ...fb, modified: f.modifiedTime ?? fb.createdAt });
+    }
+    return out;
+  }
+
+  async readLearned() {
+    const f = await d.findChild(this.f.root, LEARNED_FILE);
+    return f?.id ? d.readText(f.id) : "";
+  }
+
+  async writeLearned(text: string) {
+    const f = await d.findChild(this.f.root, LEARNED_FILE);
+    await d.writeText(text, f?.id ? { fileId: f.id } : { parentId: this.f.root, name: LEARNED_FILE });
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -159,7 +199,7 @@ export class LocalStore implements Store {
   private p = (...parts: string[]) => path.join(this.root, ...parts);
 
   async init() {
-    for (const s of ["Jobs", "Uploads", "Output", "Music/Library", "Music/Mine", "Brand", "Backgrounds", "State"]) {
+    for (const s of ["Jobs", "Uploads", "Output", "Music/Library", "Music/Mine", "Brand", "Backgrounds", "State", "Feedback"]) {
       fs.mkdirSync(this.p(s), { recursive: true });
     }
   }
@@ -236,5 +276,30 @@ export class LocalStore implements Store {
   }
   async isCancelRequested(jobId: string) {
     return fs.existsSync(this.p("Jobs", `${jobId}.cancel`));
+  }
+  async saveSpec(spec: unknown, folderId: string, name: string) {
+    const rel = `${folderId}/${name}`;
+    fs.writeFileSync(this.p(rel), JSON.stringify(spec, null, 2));
+    return rel;
+  }
+  async readSpec<T>(fileId: string) {
+    return JSON.parse(fs.readFileSync(this.p(fileId), "utf8")) as T;
+  }
+  async listFeedback() {
+    fs.mkdirSync(this.p("Feedback"), { recursive: true });
+    return fs
+      .readdirSync(this.p("Feedback"))
+      .filter((n) => n.endsWith(".json"))
+      .map((n) => {
+        const fb = Feedback.parse(JSON.parse(fs.readFileSync(this.p("Feedback", n), "utf8")));
+        return { ...fb, modified: fs.statSync(this.p("Feedback", n)).mtime.toISOString() };
+      });
+  }
+  async readLearned() {
+    const f = this.p(LEARNED_FILE);
+    return fs.existsSync(f) ? fs.readFileSync(f, "utf8") : "";
+  }
+  async writeLearned(text: string) {
+    fs.writeFileSync(this.p(LEARNED_FILE), text);
   }
 }

@@ -7,10 +7,11 @@ import { SettingsView } from "./views/Settings";
 import { Today } from "./views/Today";
 import type { Heartbeat, Settings } from "@shared/schema";
 
-type Page = "today" | "make" | "library" | "settings";
+type Page = "today" | "make" | "edit" | "library" | "settings";
 const PAGES: Array<{ id: Page; label: string; icon: React.ReactNode }> = [
   { id: "today", label: "Reels", icon: <Icon d="M7 3h10a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2zm3 6v6l5-3z" /> },
   { id: "make", label: "Make", icon: <Icon d="M12 5v14M5 12h14" /> },
+  { id: "edit", label: "Edit videos", icon: <Icon d="M4 6h16v12H4zM4 10h16M9 6v4M15 6v4" /> },
   { id: "library", label: "Library", icon: <Icon d="M9 18V6l10-2v12M9 18a3 3 0 1 1-6 0 3 3 0 0 1 6 0zm10-2a3 3 0 1 1-6 0 3 3 0 0 1 6 0z" /> },
   { id: "settings", label: "Settings", icon: <Icon d="M4 7h10M18 7h2M4 17h4M12 17h8M14 4v6M8 14v6" /> },
 ];
@@ -236,6 +237,7 @@ export function App() {
           ) : null}
           {page === "today" && <Today />}
           {page === "make" && <Make />}
+          {page === "edit" && <Make initial="edit" />}
           {page === "library" && <Library />}
           {page === "settings" && <SettingsView />}
         </main>
