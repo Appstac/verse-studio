@@ -1,9 +1,12 @@
+import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import type { z } from "zod";
 import {
   type Effects,
   type Branding,
+  type ClipAnalysis,
+  analysisKey,
   type CaptionChoice,
   type Job,
   type OutputItem,
@@ -642,6 +645,9 @@ interface PreparedClip {
   file?: string;
   /** Already placed on a virtual set in the output's shape: frame it as-is. */
   onSet?: boolean;
+  /** Claude's notes from an earlier viewing (saved in Drive). */
+  notes: string;
+  transcriptModel?: string;
   fileStart: number;
   fileLength: number;
 }
@@ -685,6 +691,65 @@ function describePicture(p: PictureStats | null) {
   return `average brightness ${p.brightness}, highlight clipping ${p.clippedHighlights}, warmth ${p.warmth}, saturation ${p.saturation}${notes.length ? ` (${notes.join(", ")})` : ""}`;
 }
 
+/** Saves (merges) what was learned about one clip to Drive: Analysis/<fileId>.json. */
+async function saveAnalysis(ctx: Ctx, clip: PreparedClip, saved: ClipAnalysis | null, notes?: string) {
+  const a: ClipAnalysis = saved ?? { fileId: clip.fileId, name: clip.name, parts: {} };
+  const key = analysisKey(clip.offset, clip.duration);
+  const prev = a.parts[key];
+  a.name = clip.name || a.name;
+  a.parts[key] = {
+    offset: clip.offset,
+    duration: clip.duration,
+    width: clip.width,
+    height: clip.height,
+    hasAudio: clip.hasAudio,
+    transcript: clip.transcript?.words.length
+      ? { language: clip.transcript.language, model: clip.transcriptModel ?? prev?.transcript?.model ?? ctx.settings.advanced.whisperModel, words: clip.transcript.words }
+      : prev?.transcript,
+    audioDesc: clip.audioDesc || prev?.audioDesc || "",
+    pictureDesc: clip.pictureDesc || prev?.pictureDesc || "",
+    notes: notes ?? prev?.notes ?? "",
+    updatedAt: new Date().toISOString(),
+  };
+  await ctx.store.writeAnalysis(a);
+}
+
+/** Keeps a folder under a size limit by removing the least recently used files. */
+function pruneCache(dir: string, maxBytes: number) {
+  try {
+    const files = fs
+      .readdirSync(dir)
+      .map((n) => {
+        const f = path.join(dir, n);
+        const st = fs.statSync(f);
+        return { f, size: st.size, t: st.atimeMs > st.mtimeMs ? st.atimeMs : st.mtimeMs };
+      })
+      .sort((a, b) => b.t - a.t);
+    let total = 0;
+    for (const x of files) {
+      total += x.size;
+      if (total > maxBytes) fs.rmSync(x.f, { force: true });
+    }
+  } catch {
+    /* ignore */
+  }
+}
+
+/** Downloads an upload once and keeps it on the studio computer (up to ~25 GB, oldest removed first). */
+async function cachedDownload(ctx: Ctx, fileId: string, name: string): Promise<string> {
+  const dir = sub("cache", "uploads");
+  const dest = path.join(dir, `${fileId.replace(/[^\w-]/g, "_")}${path.extname(name).toLowerCase() || ".mp4"}`);
+  if (fs.existsSync(dest) && fs.statSync(dest).size > 0) {
+    const now = new Date();
+    fs.utimesSync(dest, now, now);
+    return dest;
+  }
+  await ctx.store.download(fileId, `${dest}.part`);
+  fs.renameSync(`${dest}.part`, dest);
+  pruneCache(dir, 25 * 1024 ** 3);
+  return dest;
+}
+
 /**
  * Fast analysis of every clip: frame grids from keyframes, picture stats, a loudness
  * map and (in parallel) speech-to-text. No full-quality processing happens here;
@@ -700,7 +765,7 @@ async function prepareClips(
     await checkCancelled(ctx);
     const { fileId, name } = refs[i];
     await ctx.update({ stage: `Downloading clip ${i + 1} of ${refs.length}: ${name}`, progress: 0.02 + (0.15 * i) / refs.length });
-    const raw = await ctx.store.download(fileId, path.join(ctx.work, "in", `${i}-${safeName(name, 40)}${path.extname(name) || ".mp4"}`));
+    const raw = intoWork(ctx, await cachedDownload(ctx, fileId, name), `${i}-${safeName(name, 40)}${path.extname(name) || ".mp4"}`);
     const image = isImageName(name);
     const info = image ? null : await probe(raw);
     const clip: PreparedClip = {
@@ -720,6 +785,7 @@ async function prepareClips(
       pictureDesc: "",
       fileStart: 0,
       fileLength: 0,
+      notes: "",
     };
     if (image) {
       const file = path.join(ctx.work, "in", `${i}-still.mp4`);
@@ -741,31 +807,59 @@ async function prepareClips(
       clip.offset = clamp(range.start, 0, Math.max(0, clip.duration - 1));
       clip.duration = clamp(range.end, clip.offset + 0.5, clip.duration) - clip.offset;
     }
+    // What was learned about this clip before (Drive: Analysis/<fileId>.json).
+    const saved = await ctx.store.readAnalysis(fileId).catch(() => null);
+    const key = analysisKey(clip.offset, clip.duration);
+    const prev = saved?.parts[key];
+    const wantModel = opts.fastModel ? "base" : ctx.settings.advanced.whisperModel;
+    // A transcript from a smaller model is fine when only timing is needed; otherwise it must be at least as good.
+    const ORDER = ["base", "small", "medium", "large-v3-turbo"];
+    const prevTranscriptOk = !!prev?.transcript && ORDER.indexOf(prev.transcript.model) >= ORDER.indexOf(wantModel);
+    clip.notes = prev?.notes || "";
+    let learnedSomething = false;
     // Pictures and sound are analysed at the same time.
     const picture = (async () => {
       if (!opts.analyze) return;
       const sh = await frameSheets(raw, clip.duration, path.join(ctx.work, `sheet-${i}`), 48, { start: clip.offset, fast: true });
       clip.sheets = sh.files;
       clip.sheetStep = sh.step;
-      clip.pictureDesc = describePicture(await pictureStats(raw, clip.duration, clip.offset));
+      if (prev?.pictureDesc) clip.pictureDesc = prev.pictureDesc;
+      else {
+        clip.pictureDesc = describePicture(await pictureStats(raw, clip.duration, clip.offset));
+        learnedSomething = true;
+      }
     })();
     const sound = (async () => {
       if (!clip.hasAudio) return;
+      if (prev?.audioDesc && (refs[i].words || prevTranscriptOk || !opts.transcribe)) {
+        // Everything about the sound is already known: no need to even extract it.
+        clip.audioDesc = prev.audioDesc;
+        if (refs[i].words) clip.transcript = { language: refs[i].language ?? "", words: refs[i].words!, text: refs[i].words!.map((w) => w.text).join(" ") };
+        else if (prev.transcript) clip.transcript = { language: prev.transcript.language, words: prev.transcript.words, text: prev.transcript.words.map((w) => w.text).join(" ") };
+        return;
+      }
       const wav = await extractWav(raw, path.join(ctx.work, `audio-${i}.wav`), clip.offset, clip.duration);
-      if (opts.analyze) clip.audioDesc = describeAudioMap(audioMap(wav));
+      if (opts.analyze || !prev?.audioDesc) {
+        clip.audioDesc = prev?.audioDesc || describeAudioMap(audioMap(wav));
+        learnedSomething = learnedSomething || !prev?.audioDesc;
+      }
       if (refs[i].words) {
         clip.transcript = { language: refs[i].language ?? "", words: refs[i].words!, text: refs[i].words!.map((w) => w.text).join(" ") };
+      } else if (prevTranscriptOk && prev?.transcript) {
+        clip.transcript = { language: prev.transcript.language, words: prev.transcript.words, text: prev.transcript.words.map((w) => w.text).join(" ") };
       } else if (opts.transcribe) {
         await ctx.update({ stage: `Listening to clip ${i + 1} of ${refs.length}`, progress: 0.05 + (0.15 * i) / refs.length });
         try {
-          const model = opts.fastModel ? "base" : ctx.settings.advanced.whisperModel;
-          clip.transcript = await ctx.ai.transcribe(wav, model, opts.captionLanguage);
+          clip.transcript = await ctx.ai.transcribe(wav, wantModel, opts.captionLanguage);
+          clip.transcriptModel = wantModel;
+          learnedSomething = true;
         } catch (e) {
           log("Transcription failed, continuing without it:", String(e));
         }
       }
     })();
     await Promise.all([picture, sound]);
+    if (learnedSomething) await saveAnalysis(ctx, clip, saved).catch((e) => log("Couldn't save clip analysis:", String(e)));
     clips.push(clip);
   }
   return clips;
@@ -858,37 +952,76 @@ async function materializeClips(ctx: Ctx, clips: PreparedClip[], plans: EditPlan
     n++;
     await checkCancelled(ctx);
     await ctx.update({ stage: `Preparing the used part of clip ${i + 1} (${(end - start).toFixed(0)}s, full quality)`, progress: 0.35 + 0.05 * (n / windows.size) });
-    const out = path.join(ctx.work, "in", `${i}-part-${Math.round(start * 10)}-${Math.round(end * 10)}.mp4`);
-    await normalizeVideo(c.raw, out, {
-      crf: q.crf,
-      preset: q.preset,
-      start: c.offset + start,
-      length: end - start,
-      stabilize: req.stabilize ?? "auto",
-      cleanAudio: req.cleanAudio ?? true,
-      workDir: ctx.work,
-      onStage: (m) => void ctx.update({ stage: `${m} (clip ${i + 1})` }).catch(() => undefined),
-    });
+    // Processed pieces are kept on the studio computer: the same part of the same clip
+    // with the same settings is never processed twice (new edits, other shapes, revisions).
+    const cacheDir = sub("cache", "pieces");
+    const pieceKey = hashKey({ f: c.fileId, s: +(c.offset + start).toFixed(2), l: +(end - start).toFixed(2), st: req.stabilize ?? "auto", ca: req.cleanAudio ?? true, q: q.crf, p: q.preset });
+    const finishKey = needMatte
+      ? hashKey({ pieceKey, bg: req.background, relight, canvas: background ? canvas : null, v: 2 })
+      : null;
+    const cachedFinal = path.join(cacheDir, `${finishKey ?? pieceKey}.mp4`);
+    if (fs.existsSync(cachedFinal) && fs.statSync(cachedFinal).size > 0) {
+      const local = intoWork(ctx, cachedFinal, `${i}-cached-${path.basename(cachedFinal)}`);
+      const p = await probe(local);
+      if (finishKey && background) c.onSet = true;
+      Object.assign(c, { file: local, fileStart: start, fileLength: p.duration || end - start, width: p.width || c.width, height: p.height || c.height });
+      log(`Clip ${i + 1}: reused the processed part from an earlier edit`);
+      continue;
+    }
+    const out = path.join(cacheDir, `${pieceKey}.mp4`);
+    if (!(fs.existsSync(out) && fs.statSync(out).size > 0)) {
+      await normalizeVideo(c.raw, `${out}.part.mp4`, {
+        crf: q.crf,
+        preset: q.preset,
+        start: c.offset + start,
+        length: end - start,
+        stabilize: req.stabilize ?? "auto",
+        cleanAudio: req.cleanAudio ?? true,
+        workDir: ctx.work,
+        onStage: (m) => void ctx.update({ stage: `${m} (clip ${i + 1})` }).catch(() => undefined),
+      });
+      fs.renameSync(`${out}.part.mp4`, out);
+    }
     let final = out;
     if (needMatte) {
       // Find the person in every frame, then relight them and/or put them on the new background.
       try {
         const what = background ? "Removing the background" : "Finding the speaker for studio lighting";
         await ctx.update({ stage: `${what} (clip ${i + 1})` });
-        const matte = out.replace(/\.mp4$/, "-matte.mp4");
-        await makeMatte(out, matte, (p) => void ctx.update({ stage: `${what} (clip ${i + 1}): ${Math.round(p * 100)}%` }).catch(() => undefined));
-        const finished = out.replace(/\.mp4$/, "-studio.mp4");
+        const matte = path.join(cacheDir, `${pieceKey}-matte.mp4`);
+        if (!(fs.existsSync(matte) && fs.statSync(matte).size > 0)) {
+          await makeMatte(out, `${matte}.part.mp4`, (p) => void ctx.update({ stage: `${what} (clip ${i + 1}): ${Math.round(p * 100)}%` }).catch(() => undefined));
+          fs.renameSync(`${matte}.part.mp4`, matte);
+        }
         await ctx.update({ stage: background ? `Placing on the new background with studio lighting (clip ${i + 1})` : `Adding studio lighting (clip ${i + 1})` });
-        await finishSubject(out, matte, background, finished, { relight, crf: q.crf, preset: q.preset, canvas });
-        final = finished;
+        await finishSubject(out, matte, background, `${cachedFinal}.part.mp4`, { relight, crf: q.crf, preset: q.preset, canvas });
+        fs.renameSync(`${cachedFinal}.part.mp4`, cachedFinal);
+        final = cachedFinal;
         if (background) c.onSet = true;
       } catch (e) {
         log("Studio finishing failed, keeping the original:", e instanceof Error ? e.message : String(e));
       }
     }
-    const p = await probe(final);
-    Object.assign(c, { file: final, fileStart: start, fileLength: p.duration || end - start, width: p.width || c.width, height: p.height || c.height });
+    const local = intoWork(ctx, final, `${i}-${path.basename(final)}`);
+    const p = await probe(local);
+    Object.assign(c, { file: local, fileStart: start, fileLength: p.duration || end - start, width: p.width || c.width, height: p.height || c.height });
   }
+  pruneCache(sub("cache", "pieces"), 20 * 1024 ** 3);
+}
+
+const hashKey = (o: unknown) => crypto.createHash("sha1").update(JSON.stringify(o)).digest("hex").slice(0, 20);
+
+/** Makes a cached file available inside the job folder (hard link: no copy, no extra space). */
+function intoWork(ctx: Ctx, file: string, name: string): string {
+  const dest = path.join(ctx.work, "in", name);
+  fs.mkdirSync(path.dirname(dest), { recursive: true });
+  if (fs.existsSync(dest)) return dest;
+  try {
+    fs.linkSync(file, dest);
+  } catch {
+    fs.copyFileSync(file, dest);
+  }
+  return dest;
 }
 
 function editPromptFor(ctx: Ctx, req: EditSpec["request"], clips: PreparedClip[], targetSeconds = req.targetSeconds) {
@@ -909,6 +1042,7 @@ function editPromptFor(ctx: Ctx, req: EditSpec["request"], clips: PreparedClip[]
       transcript: transcriptText(c.transcript),
       audio: c.audioDesc,
       picture: c.pictureDesc,
+      notes: c.notes,
     })),
     layout: req.layout,
     captions: req.captions,
@@ -964,6 +1098,14 @@ export async function runEditJob(ctx: Ctx) {
     for (let k = 0; k < lengths.length; k++) {
       if (k > 0) await ctx.update({ stage: `Claude is planning the ${lengths[k]}s version`, progress: 0.25 + 0.05 * k });
       plans.push({ plan: enforceEffects(await ctx.ai.plan("edit", editPromptFor(ctx, req, clips, lengths[k]), EditPlan, planOpts), req.effects), seconds: lengths[k] });
+    }
+    // Keep Claude's notes about each clip for next time (Drive: Analysis/).
+    for (const n of plans[0].plan.clipNotes ?? []) {
+      const c = clips[n.clip];
+      if (c && !c.isImage && n.notes.trim()) {
+        c.notes = n.notes.trim();
+        await saveAnalysis(ctx, c, await ctx.store.readAnalysis(c.fileId).catch(() => null), c.notes).catch((e) => log("Couldn't save clip notes:", String(e)));
+      }
     }
     await materializeClips(ctx, clips, plans.map((p) => p.plan), req);
     log(`[${ctx.job.id}] analysis + planning + prep took ${Math.round((Date.now() - t0) / 1000)}s`);

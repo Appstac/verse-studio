@@ -643,7 +643,35 @@ export const SUBFOLDERS = [
   "Backgrounds",
   "State",
   "Feedback",
+  "Analysis",
 ] as const;
+
+// What the studio learned about one uploaded clip, saved as Analysis/<fileId>.json so the
+// clip never has to be listened to or studied from scratch again (even on a new computer).
+export const ClipAnalysisPart = z.object({
+  offset: z.number(),
+  duration: z.number(),
+  width: z.number(),
+  height: z.number(),
+  hasAudio: z.boolean(),
+  transcript: z
+    .object({ language: z.string(), model: z.string(), words: z.array(z.object({ text: z.string(), startMs: z.number(), endMs: z.number() })) })
+    .optional(),
+  audioDesc: z.string().default(""),
+  pictureDesc: z.string().default(""),
+  // Claude's own notes from watching it: who/what/where, best moments with times, problems.
+  notes: z.string().default(""),
+  updatedAt: z.string(),
+});
+export type ClipAnalysisPart = z.infer<typeof ClipAnalysisPart>;
+export const ClipAnalysis = z.object({
+  fileId: z.string(),
+  name: z.string(),
+  // One entry per part of the clip that was used ("<start>-<length>", whole clip = "0-<duration>").
+  parts: z.record(z.string(), ClipAnalysisPart).default({}),
+});
+export type ClipAnalysis = z.infer<typeof ClipAnalysis>;
+export const analysisKey = (offset: number, duration: number) => `${offset.toFixed(1)}-${duration.toFixed(1)}`;
 
 // One file per rating in Feedback/ (written by the website, never edited by
 // the worker, so there are no write races).

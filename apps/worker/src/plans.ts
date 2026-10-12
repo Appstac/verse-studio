@@ -88,6 +88,11 @@ export const EditPlan = z.object({
     .describe(
       "Promo/recap story text typed on screen in a serif typewriter style (e.g. 'He was faithful.' / 'And tonight… we're just grateful.' / '\"A gathering beyond the ordinary.\" — Worship Circle'). 2-5 short lines, never over speech captions. Empty unless the request or caption style calls for it.",
     ),
+  clipNotes: z
+    .array(z.object({ clip: z.number().int(), notes: z.string() }))
+    .describe(
+      "For each video clip: 2-5 sentences a future editor needs without re-watching it: who is in it and where they stand, what happens, the best moments with clip times, weak/blocked/shaky stretches with times. Merge with any earlier notes you were given.",
+    ),
   cta: z.string().describe("Closing call-to-action line for the end card, max 6 words, or empty"),
   notes: z.string().describe("One or two sentences explaining the edit choices"),
 });
@@ -191,6 +196,7 @@ export interface EditClipInfo {
   transcript: string;
   audio: string;
   picture: string;
+  notes?: string;
 }
 
 // Editing recipes, written from what works for church and worship accounts
@@ -258,6 +264,7 @@ export function editPrompt(opts: {
   Frame grids (4x3, left-to-right then top-to-bottom, one frame every ${c.sheetStep.toFixed(1)}s, timestamps printed on each frame): ${c.sheets.join(", ")}
   ${c.picture ? `Picture: ${c.picture}` : ""}
   ${c.audio ? `Sound: ${c.audio}` : ""}
+  ${c.notes ? `Your notes from an earlier viewing of this clip (trust them; open frame grids only to check framing or something specific): ${c.notes}` : ""}
   Transcript with times: ${c.transcript || "(no clear speech detected)"}`,
     )
     .join("\n\n");
@@ -281,7 +288,7 @@ ${opts.fullLength ? `FULL-LENGTH MODE: keep the ENTIRE message in its original o
 
 ${voice(s)}
 
-The owner uploaded these clips. Open EVERY frame grid image with the Read tool before deciding: you need to see who is where in the frame, what is in the foreground, and where the best moments are.
+The owner uploaded these clips. Open the frame grid images with the Read tool before deciding (all of them for clips without earlier notes): you need to see who is where in the frame, what is in the foreground, and where the best moments are.
 
 ${clipText}
 

@@ -74,6 +74,8 @@ interface Upload {
   error?: string;
   /** Local preview of the file (never uploaded twice). */
   url?: string;
+  /** Picked from Drive (already uploaded earlier): the preview is fetched only when needed. */
+  fromDrive?: boolean;
   isVideo?: boolean;
   duration?: number;
   start?: number;
@@ -86,12 +88,24 @@ const fmt = (t: number) => `${Math.floor(t / 60)}:${String(Math.floor(t % 60)).p
 function TrimPanel({ u, onChange }: { u: Upload; onChange: (p: Partial<Upload>) => void }) {
   const video = useRef<HTMLVideoElement>(null);
   const [failed, setFailed] = useState(false);
+  const [loading, setLoading] = useState(false);
+  useEffect(() => {
+    // Clips picked from Drive: download a preview copy only when trimming is opened.
+    if (u.url || !u.fromDrive || !u.fileId) return;
+    setLoading(true);
+    g.objectUrl(u.fileId)
+      .then((url) => onChange({ url }))
+      .catch(() => setFailed(true))
+      .finally(() => setLoading(false));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [u.fileId]);
   const dur = u.duration ?? 0;
   const start = u.start ?? 0;
   const end = u.end ?? dur;
   return (
     <div className="trim">
-      {!failed ? (
+      {loading ? <p className="hint">Loading the preview from Drive…</p> : null}
+      {!failed && u.url ? (
         <video
           ref={video}
           src={u.url}
@@ -105,7 +119,7 @@ function TrimPanel({ u, onChange }: { u: Upload; onChange: (p: Partial<Upload>) 
             if (u.end && e.currentTarget.currentTime > u.end) e.currentTarget.currentTime = u.start ?? 0;
           }}
         />
-      ) : (
+      ) : loading ? null : (
         <p className="hint">This browser can't preview this video format, but you can still type the times below.</p>
       )}
       <div className="row" style={{ flexWrap: "wrap" }}>
@@ -133,10 +147,60 @@ function TrimPanel({ u, onChange }: { u: Upload; onChange: (p: Partial<Upload>) 
   );
 }
 
+// Clips already in Drive (Verse Studio → Uploads): pick them again without re-uploading.
+// "Studied" means the studio already has its transcript, sound map and notes saved.
+function DrivePicker({ picked, onPick }: { picked: Set<string>; onPick: (f: g.MediaFile) => void }) {
+  const { studio } = useApp();
+  const [files, setFiles] = useState<g.MediaFile[] | null>(null);
+  const [studied, setStudied] = useState<Set<string>>(new Set());
+  const [filter, setFilter] = useState("");
+  const [broken, setBroken] = useState<Set<string>>(new Set());
+  useEffect(() => {
+    g.listMedia(studio.folders.Uploads).then(setFiles).catch(() => setFiles([]));
+    g.children(studio.folders.Analysis, "mimeType='application/json'")
+      .then((a) => setStudied(new Set(a.map((x) => x.name.replace(/\.json$/, "")))))
+      .catch(() => undefined);
+  }, [studio.folders.Uploads, studio.folders.Analysis]);
+  if (files === null) return <p className="hint">Loading your Drive uploads…</p>;
+  if (!files.length) return <p className="hint">Nothing in Verse Studio → Uploads yet.</p>;
+  const shown = files.filter((f) => !filter || f.name.toLowerCase().includes(filter.toLowerCase()));
+  const dur = (f: g.MediaFile) => {
+    const ms = Number(f.videoMediaMetadata?.durationMillis ?? 0);
+    return ms ? `${Math.floor(ms / 60000)}:${String(Math.round(ms / 1000) % 60).padStart(2, "0")}` : "";
+  };
+  return (
+    <div className="stack">
+      <input type="search" placeholder="Search by file name" value={filter} onChange={(e) => setFilter(e.target.value)} />
+      <div className="bg-grid wide">
+        {shown.map((f) => {
+          const on = picked.has(f.id);
+          return (
+            <button key={f.id} type="button" className={`bg-tile ${on ? "on" : ""}`} onClick={() => !on && onPick(f)} title={f.name}>
+              {f.thumbnailLink && !broken.has(f.id) ? (
+                <img src={f.thumbnailLink} alt="" loading="lazy" referrerPolicy="no-referrer" onError={() => setBroken((b) => new Set(b).add(f.id))} />
+              ) : (
+                <span className="bg-badge" style={{ top: 6, bottom: "auto" }}>
+                  {f.mimeType.startsWith("video/") ? "🎬" : "🖼️"} {f.name}
+                </span>
+              )}
+              <span className="bg-badge">
+                {on ? "✓ added" : studied.has(f.id) ? "✓ studied" : new Date(f.createdTime ?? "").toLocaleDateString()}
+                {dur(f) ? ` · ${dur(f)}` : ""}
+              </span>
+            </button>
+          );
+        })}
+      </div>
+      <small className="hint">“Studied” clips skip listening and analysis: Claude starts from its saved notes.</small>
+    </div>
+  );
+}
+
 function Uploader({ uploads, setUploads }: { uploads: Upload[]; setUploads: React.Dispatch<React.SetStateAction<Upload[]>> }) {
   const { studio } = useApp();
   const input = useRef<HTMLInputElement>(null);
   const [over, setOver] = useState(false);
+  const [fromDriveOpen, setFromDriveOpen] = useState(false);
 
   const add = (files: FileList | null) => {
     if (!files) return;
@@ -173,6 +237,28 @@ function Uploader({ uploads, setUploads }: { uploads: Upload[]; setUploads: Reac
         <p className="hint">Tap to choose from your phone or drag files here. They upload to your Drive while you write the prompt.</p>
         <input ref={input} type="file" accept="video/*,image/*" multiple hidden onChange={(e) => add(e.target.files)} />
       </div>
+      <details className="subpanel" open={fromDriveOpen} onToggle={(e) => setFromDriveOpen((e.target as HTMLDetailsElement).open)}>
+        <summary>Or choose videos already in your Drive (no upload)</summary>
+        {fromDriveOpen ? (
+          <DrivePicker
+            picked={new Set(uploads.map((u) => u.fileId ?? ""))}
+            onPick={(f) =>
+              setUploads((u) => [
+                ...u,
+                {
+                  key: `drive-${f.id}`,
+                  name: f.name,
+                  progress: 1,
+                  fileId: f.id,
+                  fromDrive: true,
+                  isVideo: f.mimeType.startsWith("video/"),
+                  duration: f.videoMediaMetadata?.durationMillis ? Number(f.videoMediaMetadata.durationMillis) / 1000 : undefined,
+                },
+              ])
+            }
+          />
+        ) : null}
+      </details>
       {uploads.length ? (
         <div className="files">
           {uploads.map((u) => (
@@ -180,7 +266,7 @@ function Uploader({ uploads, setUploads }: { uploads: Upload[]; setUploads: Reac
               <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{u.name}</span>
               <span className="row">
                 <span className={u.error ? "pill failed" : u.fileId ? "pill done" : "pill"}>
-                  {u.error ? "Failed" : u.fileId ? "Uploaded" : `${Math.round(u.progress * 100)}%`}
+                  {u.error ? "Failed" : u.fromDrive ? "From Drive" : u.fileId ? "Uploaded" : `${Math.round(u.progress * 100)}%`}
                 </span>
                 <button type="button" className="btn quiet small" aria-label={`Remove ${u.name}`} onClick={() => setUploads((x) => x.filter((y) => y.key !== u.key))}>
                   Remove
@@ -192,12 +278,15 @@ function Uploader({ uploads, setUploads }: { uploads: Upload[]; setUploads: Reac
                 </div>
               ) : null}
               {u.error ? <small style={{ gridColumn: "1 / -1", color: "var(--rose)" }}>{u.error}</small> : null}
-              {u.isVideo && u.url ? (
+              {u.isVideo && (u.url || u.fromDrive) ? (
                 <details className="trimwrap" style={{ gridColumn: "1 / -1" }}>
                   <summary className="hint">
                     Preview and trim{u.start !== undefined || u.end !== undefined ? ` · ${fmt(u.start ?? 0)}–${fmt(u.end ?? u.duration ?? 0)}` : ""}
                   </summary>
-                  <TrimPanel u={u} onChange={(p) => setUploads((x) => x.map((y) => (y.key === u.key ? { ...y, ...p } : y)))} />
+                  <TrimPanel
+                    u={u}
+                    onChange={(p) => setUploads((x) => x.map((y) => (y.key === u.key ? { ...y, ...p } : y)))}
+                  />
                 </details>
               ) : null}
             </div>

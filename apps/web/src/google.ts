@@ -295,3 +295,20 @@ export async function trash(id: string) {
 export function driveFolderLink(id: string) {
   return `https://drive.google.com/drive/folders/${id}`;
 }
+
+export interface MediaFile extends DFile {
+  thumbnailLink?: string;
+  videoMediaMetadata?: { durationMillis?: string; width?: number; height?: number };
+}
+
+/** Videos and photos in a folder, newest first, with Drive's own thumbnails. */
+export async function listMedia(parent: string, pageSize = 200): Promise<MediaFile[]> {
+  const p = new URLSearchParams({
+    q: `'${parent}' in parents and trashed=false and (mimeType contains 'video/' or mimeType contains 'image/')`,
+    fields: "files(id,name,mimeType,size,createdTime,modifiedTime,thumbnailLink,videoMediaMetadata(durationMillis,width,height))",
+    pageSize: String(pageSize),
+    orderBy: "createdTime desc",
+  });
+  const j = await (await api(`${API}/files?${p}`)).json();
+  return j.files as MediaFile[];
+}

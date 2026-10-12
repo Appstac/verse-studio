@@ -2,7 +2,7 @@
 // same folder layout on disk for offline testing (npm run demo).
 import fs from "node:fs";
 import path from "node:path";
-import { Feedback, Heartbeat, Job, LEARNED_FILE, Settings, defaultSettings } from "../../../shared/schema";
+import { ClipAnalysis, Feedback, Heartbeat, Job, LEARNED_FILE, Settings, defaultSettings } from "../../../shared/schema";
 import * as d from "./drive";
 import { isAudioName, isImageName, isVideoName } from "./media";
 
@@ -36,6 +36,8 @@ export interface Store {
   listFeedback(): Promise<Array<Feedback & { modified: string }>>;
   readLearned(): Promise<string>;
   writeLearned(text: string): Promise<void>;
+  readAnalysis(fileId: string): Promise<ClipAnalysis | null>;
+  writeAnalysis(a: ClipAnalysis): Promise<void>;
 }
 
 export class DriveStore implements Store {
@@ -190,6 +192,22 @@ export class DriveStore implements Store {
     const f = await d.findChild(this.f.root, LEARNED_FILE);
     await d.writeText(text, f?.id ? { fileId: f.id } : { parentId: this.f.root, name: LEARNED_FILE });
   }
+
+  async readAnalysis(fileId: string): Promise<ClipAnalysis | null> {
+    try {
+      const f = await d.findChild(this.f.Analysis, `${fileId}.json`);
+      if (!f?.id) return null;
+      const p = ClipAnalysis.safeParse(await d.readJson(f.id));
+      return p.success ? p.data : null;
+    } catch {
+      return null;
+    }
+  }
+
+  async writeAnalysis(a: ClipAnalysis) {
+    const f = await d.findChild(this.f.Analysis, `${a.fileId}.json`);
+    await d.writeJson(a, f?.id ? { fileId: f.id } : { parentId: this.f.Analysis, name: `${a.fileId}.json` });
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -199,7 +217,7 @@ export class LocalStore implements Store {
   private p = (...parts: string[]) => path.join(this.root, ...parts);
 
   async init() {
-    for (const s of ["Jobs", "Uploads", "Output", "Music/Library", "Music/Mine", "Brand", "Backgrounds", "State", "Feedback"]) {
+    for (const s of ["Jobs", "Uploads", "Output", "Music/Library", "Music/Mine", "Brand", "Backgrounds", "State", "Feedback", "Analysis"]) {
       fs.mkdirSync(this.p(s), { recursive: true });
     }
   }
@@ -301,5 +319,16 @@ export class LocalStore implements Store {
   }
   async writeLearned(text: string) {
     fs.writeFileSync(this.p(LEARNED_FILE), text);
+  }
+
+  async readAnalysis(fileId: string) {
+    const f = this.p("Analysis", `${fileId.replace(/[\\/]/g, "_")}.json`);
+    if (!fs.existsSync(f)) return null;
+    const p = ClipAnalysis.safeParse(JSON.parse(fs.readFileSync(f, "utf8")));
+    return p.success ? p.data : null;
+  }
+
+  async writeAnalysis(a: ClipAnalysis) {
+    fs.writeFileSync(this.p("Analysis", `${a.fileId.replace(/[\\/]/g, "_")}.json`), JSON.stringify(a, null, 2));
   }
 }
