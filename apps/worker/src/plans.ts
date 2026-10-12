@@ -231,6 +231,10 @@ export function editPrompt(opts: {
   focus: string;
   hookOptions: number;
   autoColor: boolean;
+  background?: string;
+  format?: "reel" | "youtube";
+  fullLength?: boolean;
+  editStyle?: "professional" | "creator";
 }) {
   const { s } = opts;
   const clipText = opts.clips
@@ -245,7 +249,21 @@ export function editPrompt(opts: {
     .join("\n\n");
   const type = opts.editType === "auto" ? "" : opts.editType;
   const recipes = type ? RECIPES[type] : Object.values(RECIPES).join("\n\n");
-  return `You are an award-winning short-form video editor for church and Christian creators, making an Instagram Reel (9:16, 1080x1920). The goal: a reel people watch to the end, feel moved and encouraged by, save and send to a friend.
+  const yt = opts.format === "youtube";
+  const pro = opts.editStyle !== "creator";
+  return `You are a senior professional video editor (broadcast and documentary background) who now edits for church ministries and Christian creators, making ${yt ? "a YouTube video (16:9, 1920x1080, horizontal)" : "an Instagram Reel (9:16, 1080x1920, vertical)"}. The goal: a video people watch to the end, feel moved and encouraged by, save and send to a friend.
+${yt ? "YouTube notes: framing is horizontal, so focus/crop work on a wide frame (rule of thirds is fine for a single speaker, crop 1.0-1.25). Hooks still matter in the first 5 seconds. Captions sit low like subtitles." : ""}
+${
+    pro
+      ? `EDITING STANDARD: PROFESSIONAL. Edit like a high-end ministry media team or a documentary editor, never like a phone app:
+- Story first: every cut has a reason (a new thought, a reaction, a better angle). Respect the speaker's breathing and rhythm; cut on natural pauses, never mid-word.
+- Restraint: no gimmicks. Use "punch" only as a subtle reframe on a jump cut (crop about 1.1-1.2 over the base), slow "in" push-ins for the most important lines, otherwise steady framing. Prefer "fade" (dissolve) between different scenes, straight cuts within a scene.
+- Framing like a cinematographer: eyes on the upper third, headroom right, nose room toward where they look, no awkward limb or head crops.
+- Colour: natural, cinematic and consistent across clips (matched skin tones, controlled highlights, gentle contrast). Never oversaturated.
+- Text: an elegant, short title (hook) and clean subtitles. No emoji in on-screen text. textOverlay only for a scripture reference or a key phrase, rarely.`
+      : "EDITING STANDARD: CREATOR (energetic social style is welcome: punch-ins on jump cuts, pop-up key words, playful pacing)."
+  }
+${opts.fullLength ? `FULL-LENGTH MODE: keep the ENTIRE message in its original order. Do not pick highlights. Only remove dead air at the start and end, false starts, and pauses longer than about 1.5 s. Segments must cover the whole talk end to end (use long segments). Ignore the target length.` : ""}
 
 ${voice(s)}
 
@@ -256,6 +274,7 @@ ${clipText}
 Owner's request: ${opts.userPrompt || "Make the most engaging, encouraging reel possible from these clips."}
 ${type ? `Kind of video (chosen by the owner): ${type}.` : "Decide which kind of video this is (style)."}
 ${opts.focus ? `Keep this person/subject in frame: ${opts.focus}.` : ""}
+${opts.background && opts.background !== "none" ? `The room behind the person will be replaced with a ${opts.background === "blur" ? "blurred version of itself" : "professional studio/worship backdrop"} (virtual green screen). The frame grids still show the original room. Frame the person like a studio shot: centred, head and shoulders to mid-body (crop 1.1-1.4), steady; colour grades should keep skin natural and avoid changing the backdrop much.` : ""}
 ${opts.songTitle || opts.singer ? `Song: "${opts.songTitle || "untitled"}"${opts.singer ? ` sung by ${opts.singer}` : ""} (a title card is added automatically).` : ""}
 ${opts.lyrics ? `Lyrics provided by the owner (use these exact lines for lyricLines, in this order; match them to the transcript and the sound phrases to time them):\n"""\n${opts.lyrics.slice(0, 4000)}\n"""` : ""}
 

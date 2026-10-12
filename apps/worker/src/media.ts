@@ -62,6 +62,8 @@ export async function probe(file: string): Promise<ProbeInfo> {
 // H.264 30fps file the renderer can seek reliably. Optionally steadies shaky
 // footage and cleans up the sound on the way.
 export interface NormalizeOptions {
+  crf?: number;
+  preset?: string;
   /** Only process this part of the input (seconds). */
   start?: number;
   length?: number;
@@ -93,7 +95,7 @@ export async function normalizeVideo(input: string, output: string, opts: Normal
       "-i", input,
       "-vf", vf,
       ...audio,
-      "-c:v", "libx264", "-preset", "veryfast", "-crf", "18", "-g", "30",
+      "-c:v", "libx264", "-preset", opts.preset ?? "veryfast", "-crf", String(opts.crf ?? 18), "-g", "30",
       "-c:a", "aac", "-b:a", "192k", "-ar", "48000", "-ac", "2",
       "-movflags", "+faststart",
       output,

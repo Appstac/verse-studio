@@ -249,6 +249,12 @@ function EditForm() {
             captionLanguage: capLang,
             keepOriginalAudio: keepAudio,
             alsoCarousel,
+            format: studio.settings.edit.format,
+            fullLength: studio.settings.edit.fullLength,
+            quality: studio.settings.edit.quality,
+            editStyle: studio.settings.edit.editStyle,
+            relight: studio.settings.edit.relight,
+            background: studio.settings.edit.background,
             editType,
             lyrics: song ? lyrics.trim() : "",
             songTitle: song ? songTitle.trim() : "",
@@ -460,6 +466,9 @@ function VerseForm() {
           const references = refs.split(/\n|;/).map((r) => r.trim()).filter(Boolean).slice(0, 20);
           await queueJob(studio.folders, {
             type: "verse",
+            format: "reel",
+            bothFormats: false,
+            quality: "high",
             count: references.length || count,
             theme,
             language,

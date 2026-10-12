@@ -48,7 +48,8 @@ async function api(params: Record<string, string>): Promise<Hit[]> {
 async function download(h: Hit): Promise<string> {
   const dest = path.join(sub("stock"), `${h.id}.mp4`);
   if (fs.existsSync(dest) && fs.statSync(dest).size > 0) return dest;
-  const r = h.videos.medium?.url ? h.videos.medium : h.videos.small;
+  const v = h.videos as Record<string, { url: string; width: number; height: number } | undefined>;
+  const r = (v.large?.url ? v.large : v.medium?.url ? v.medium : v.small)!;
   const res = await fetch(r.url);
   if (!res.ok || !res.body) throw new Error(`Pixabay download failed (${res.status})`);
   await pipeline(Readable.fromWeb(res.body as never), fs.createWriteStream(dest + ".part"));
@@ -85,6 +86,32 @@ export async function footageById(id: number): Promise<string | null> {
     return hits[0] ? await download(hits[0]) : null;
   } catch (e) {
     log("Pixabay lookup failed:", e instanceof Error ? e.message : String(e));
+    return null;
+  }
+}
+
+/** A Pixabay photo by id (largest size the free API gives, 1280px), cached on disk. */
+export async function photoById(id: number): Promise<string | null> {
+  const dest = path.join(sub("stock"), `photo-${id}.jpg`);
+  if (fs.existsSync(dest) && fs.statSync(dest).size > 0) return dest;
+  const key = process.env.PIXABAY_API_KEY;
+  if (!key) return null;
+  try {
+    const u = new URL("https://pixabay.com/api/");
+    u.search = new URLSearchParams({ key, id: String(id) }).toString();
+    const res = await fetch(u);
+    if (!res.ok) throw new Error(`Pixabay returned ${res.status}`);
+    const j = (await res.json()) as { hits: Array<{ largeImageURL?: string; fullHDURL?: string; webformatURL: string }> };
+    const h = j.hits[0];
+    const src = h?.fullHDURL || h?.largeImageURL || h?.webformatURL;
+    if (!src) return null;
+    const img = await fetch(src);
+    if (!img.ok || !img.body) throw new Error(`Pixabay download failed (${img.status})`);
+    await pipeline(Readable.fromWeb(img.body as never), fs.createWriteStream(dest + ".part"));
+    fs.renameSync(dest + ".part", dest);
+    return dest;
+  } catch (e) {
+    log("Pixabay photo failed:", e instanceof Error ? e.message : String(e));
     return null;
   }
 }

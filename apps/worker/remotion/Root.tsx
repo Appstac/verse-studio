@@ -1,14 +1,17 @@
 import React from "react";
 import { Composition, Still } from "remotion";
+import { Backdrop } from "./Backdrop";
 import { ClipEdit } from "./ClipEdit";
 import { Slide } from "./Slide";
 import { VerseReel } from "./VerseReel";
 import {
+  FORMAT_SIZE,
   FPS,
   REEL,
   SLIDE,
   clipEditFrames,
   verseReelFrames,
+  type BackdropProps,
   type BrandProps,
   type ClipEditProps,
   type SlideProps,
@@ -60,8 +63,28 @@ const clipDefaults: ClipEditProps = {
   preset: "night",
 };
 
+const backdropDefaults: BackdropProps = { light: "beams", palette: "royal" };
+
 export const Root: React.FC = () => (
   <>
+    <Composition
+      id="Backdrop"
+      component={Backdrop}
+      fps={FPS}
+      width={REEL.width}
+      height={REEL.height}
+      durationInFrames={240}
+      defaultProps={backdropDefaults}
+      calculateMetadata={({ props }) => FORMAT_SIZE[props.format ?? "reel"]}
+    />
+    <Still
+      id="BackdropStill"
+      component={Backdrop}
+      width={REEL.width}
+      height={REEL.height}
+      defaultProps={backdropDefaults}
+      calculateMetadata={({ props }) => FORMAT_SIZE[props.format ?? "reel"]}
+    />
     <Composition
       id="VerseReel"
       component={VerseReel}
@@ -70,7 +93,7 @@ export const Root: React.FC = () => (
       height={REEL.height}
       durationInFrames={verseReelFrames(verseDefaults)}
       defaultProps={verseDefaults}
-      calculateMetadata={({ props }) => ({ durationInFrames: verseReelFrames(props) })}
+      calculateMetadata={({ props }) => ({ durationInFrames: verseReelFrames(props), ...FORMAT_SIZE[props.format ?? "reel"] })}
     />
     <Still id="Slide" component={Slide} width={SLIDE.width} height={SLIDE.height} defaultProps={slideDefaults} />
     <Composition
@@ -81,7 +104,7 @@ export const Root: React.FC = () => (
       height={REEL.height}
       durationInFrames={FPS * 5}
       defaultProps={clipDefaults}
-      calculateMetadata={({ props }) => ({ durationInFrames: clipEditFrames(props) })}
+      calculateMetadata={({ props }) => ({ durationInFrames: clipEditFrames(props), ...FORMAT_SIZE[props.format ?? "reel"] })}
     />
   </>
 );

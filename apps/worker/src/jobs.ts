@@ -12,7 +12,9 @@ import {
   PRESETS,
   brandingFromSettings,
 } from "../../../shared/schema";
-import { findFootage, footageById, pixabayEnabled } from "./pixabay";
+import { findFootage, footageById, photoById, pixabayEnabled } from "./pixabay";
+import { type BackgroundSource, finishSubject, makeMatte, mattingAvailable } from "./matting";
+import { backdropById } from "../../../shared/backdrops";
 import { FPS, TRANSITION_FRAMES, type BrandProps, type CaptionWord, type ClipEditProps, type ClipSegment, type PresetName, type VerseReelProps } from "../remotion/types";
 import { TRANSLATION_LABEL } from "./bible";
 import { mount, startFileServer, unmount } from "./fileserver";
@@ -50,7 +52,7 @@ import {
   verseRevisionPrompt,
   type VerseItem,
 } from "./plans";
-import { renderClipEdit, renderCover, renderSlide, renderVerseReel } from "./render";
+import { renderBackdrop, renderClipEdit, renderCover, renderSlide, renderVerseReel } from "./render";
 import { sub } from "./paths";
 import type { MusicFile, Store } from "./store";
 import type { Transcript } from "./whisper";
@@ -85,6 +87,8 @@ interface SpecLook {
 
 export interface VerseSpec extends SpecLook {
   source: "verse";
+  format?: "reel" | "youtube";
+  quality?: "standard" | "high" | "ultra";
   item: VerseItem;
   text: string;
   displayRef: string;
@@ -225,6 +229,7 @@ async function deliverReel(
     hasVoice: boolean;
     /** Songs: never put library music on top of the singing. */
     noMusicUnderVoice?: boolean;
+    format?: "reel" | "youtube";
     folderId: string;
     spec: AnySpec;
     reference?: string;
@@ -258,6 +263,7 @@ async function deliverReel(
   const specFileId = await ctx.store.saveSpec({ ...opts.spec, caption: opts.caption.trim(), hashtags: tags, title: opts.title }, opts.folderId, `${opts.slug}-spec.json`);
   return {
     kind: "reel",
+    format: opts.format ?? "reel",
     title: opts.title,
     caption: opts.caption.trim(),
     hashtags: tags,
@@ -342,8 +348,15 @@ export async function runVerseJob(ctx: Ctx) {
       const step = 0.85 / items.length;
       await ctx.update({ stage: `Reel ${i + 1} of ${items.length}: ${it.reference}`, progress: base });
       const spec = await resolveVerse(ctx, it, backgrounds, req.preset === "auto" ? undefined : req.preset, i);
+      spec.format = req.format ?? "reel";
+      spec.quality = req.quality ?? "high";
       const slug = `${String(i + 1).padStart(2, "0")}-${safeName(it.title || it.reference)}`;
-      outputs.push(await renderVerseSpec(ctx, spec, brand, url, slug, folderId, base, step, {}));
+      const formats: Array<"reel" | "youtube"> = req.bothFormats ? [spec.format, spec.format === "reel" ? "youtube" : "reel"] : [spec.format];
+      for (const [k, fmt] of formats.entries()) {
+        const one = { ...spec, format: fmt };
+        const sub = step / formats.length;
+        outputs.push(await renderVerseSpec(ctx, one, brand, url, fmt === "youtube" ? `${slug}-youtube` : slug, folderId, base + sub * k, sub, {}));
+      }
       history.used.push({ ref: it.reference, date: new Date().toISOString() });
       await ctx.update({ outputs: [...outputs] });
     }
@@ -437,6 +450,7 @@ async function verseProps(ctx: Ctx, spec: VerseSpec, brand: BrandProps, url: (f:
   const verseSeconds = clamp((words * perWord + 3) * (spec.speed || 1), s.reel.minSeconds - 2, s.reel.maxSeconds * 1.3);
   const hook = s.reel.showHook && it.hook.trim() ? it.hook.trim() : undefined;
   return {
+    format: spec.format ?? "reel",
     preset,
     language: it.language,
     hook,
@@ -464,9 +478,14 @@ async function renderVerseSpec(
 ) {
   const props = await verseProps(ctx, spec, brand, url);
   const master = path.join(ctx.work, `${slug}-master.mp4`);
-  const duration = await renderVerseReel(props, master, (p) => {
-    void ctx.update({ progress: base + step * 0.8 * p }).catch(() => undefined);
-  });
+  const duration = await renderVerseReel(
+    props,
+    master,
+    (p) => {
+      void ctx.update({ progress: base + step * 0.8 * p }).catch(() => undefined);
+    },
+    QUALITY[spec.quality ?? "high"],
+  );
   const cover = path.join(ctx.work, `${slug}-cover.jpg`);
   await renderCover(props, cover, props.hookSeconds + props.verseSeconds * 0.75);
   await ctx.update({ stage: `${spec.item.title || spec.item.reference}: adding music and uploading`, progress: base + step * 0.85 });
@@ -485,6 +504,7 @@ async function renderVerseSpec(
     reference: spec.displayRef,
     needsReview: spec.needsReview,
     reviewNote: spec.reviewNote,
+    format: spec.format ?? "reel",
     ...lineage,
   });
 }
@@ -619,6 +639,8 @@ interface PreparedClip {
   transcript?: Transcript;
   /** Full-quality processed piece for rendering, and where it starts in clip time. */
   file?: string;
+  /** Already placed on a virtual set in the output's shape: frame it as-is. */
+  onSet?: boolean;
   fileStart: number;
   fileLength: number;
 }
@@ -748,6 +770,47 @@ async function prepareClips(
   return clips;
 }
 
+// Encoding settings for each output quality.
+export const QUALITY = {
+  standard: { crf: 20, preset: "veryfast", scale: 1 },
+  high: { crf: 16, preset: "medium", scale: 1 },
+  ultra: { crf: 16, preset: "medium", scale: 2 },
+} as const;
+const qualityOf = (req: { quality?: keyof typeof QUALITY }) => QUALITY[req.quality ?? "high"];
+
+/** Turns the chosen background into something the compositor can use, or null for none. */
+async function resolveBackground(ctx: Ctx, req: EditSpec["request"]): Promise<BackgroundSource | null> {
+  const bg = req.background;
+  if (!bg || bg.mode === "none") return null;
+  if (!(await mattingAvailable())) {
+    log("Background replacement isn't installed on this computer yet (press Update on the website). Keeping the original background.");
+    return null;
+  }
+  if (bg.mode === "blur") return { kind: "blur" };
+  if (bg.mode === "color") return { kind: "color", color: bg.color || "#1b2a6b" };
+  const format = req.format ?? "reel";
+  // A soft camera blur on real photos/videos, scaled to the frame size.
+  const blur = bg.depthBlur === false ? 0 : format === "youtube" ? 6 : 8;
+  if (bg.mode === "studio") {
+    const p = backdropById(bg.preset) ?? backdropById("beams-royal")!;
+    await ctx.update({ stage: `Preparing the ${p.label} backdrop` });
+    return { kind: "video", file: await renderBackdrop(p.light, p.palette, format) };
+  }
+  if (bg.mode === "stock" && bg.stockId) {
+    await ctx.update({ stage: "Downloading the background" });
+    const f = bg.stockKind === "video" ? await footageById(bg.stockId) : await photoById(bg.stockId);
+    if (f) return bg.stockKind === "video" ? { kind: "video", file: f, blur } : { kind: "image", file: f, blur };
+    log("Stock background unavailable (check the Pixabay key); blurring the real background instead.");
+    return { kind: "blur" };
+  }
+  if (bg.mode === "mine" && bg.mineFileId) {
+    const name = bg.mineName || (await ctx.store.fileName(bg.mineFileId));
+    const local = await ctx.store.download(bg.mineFileId, path.join(ctx.work, "bg", `mine-${safeName(name, 30)}${path.extname(name) || ".jpg"}`));
+    return isImageName(name) ? { kind: "image", file: local, blur } : { kind: "video", file: local, blur };
+  }
+  return null;
+}
+
 /**
  * Makes full-quality pieces of only the parts the plans use (plus a little
  * margin), steadied and with cleaned-up sound if asked. Much faster than
@@ -771,16 +834,33 @@ async function materializeClips(ctx: Ctx, clips: PreparedClip[], plans: EditPlan
     if (plan.audioBed && plan.audioBed.clip >= 0) add(plan.audioBed.clip, plan.audioBed.start, plan.audioBed.start + total);
   }
   let n = 0;
-  for (const [i, [a, b]] of windows) {
+  const pending = [...windows].filter(([i, [a, b]]) => {
     const c = clips[i];
     const start = clamp(a - 0.6, 0, c.duration);
     const end = clamp(b + 0.6, start + 0.5, c.duration);
-    if (c.file && c.fileStart <= start && c.fileStart + c.fileLength >= end) continue;
+    return !(c.file && c.fileStart <= start + 0.05 && c.fileStart + c.fileLength >= end - 0.25);
+  });
+  if (!pending.length) return;
+  const background = await resolveBackground(ctx, req).catch((e) => (log("Background setup failed:", String(e)), null));
+  const out16x9 = (req.format ?? "reel") === "youtube";
+  const canvas = out16x9 ? { width: 1920, height: 1080 } : { width: 1080, height: 1920 };
+  // Studio lighting on the speaker: always with a new background; on its own for
+  // talking/sermon videos (songs and montages usually have many people in frame).
+  const speakerStyle = plans.some((p) => p.style === "talking-head" || p.style === "sermon");
+  const relight = req.relight !== false && (!!background || speakerStyle);
+  const needMatte = (!!background || relight) && (await mattingAvailable());
+  const q = qualityOf(req);
+  for (const [i, [a, b]] of pending) {
+    const c = clips[i];
+    const start = clamp(a - 0.6, 0, c.duration);
+    const end = clamp(b + 0.6, start + 0.5, c.duration);
     n++;
     await checkCancelled(ctx);
     await ctx.update({ stage: `Preparing the used part of clip ${i + 1} (${(end - start).toFixed(0)}s, full quality)`, progress: 0.35 + 0.05 * (n / windows.size) });
     const out = path.join(ctx.work, "in", `${i}-part-${Math.round(start * 10)}-${Math.round(end * 10)}.mp4`);
     await normalizeVideo(c.raw, out, {
+      crf: q.crf,
+      preset: q.preset,
       start: c.offset + start,
       length: end - start,
       stabilize: req.stabilize ?? "auto",
@@ -788,8 +868,25 @@ async function materializeClips(ctx: Ctx, clips: PreparedClip[], plans: EditPlan
       workDir: ctx.work,
       onStage: (m) => void ctx.update({ stage: `${m} (clip ${i + 1})` }).catch(() => undefined),
     });
-    const p = await probe(out);
-    Object.assign(c, { file: out, fileStart: start, fileLength: p.duration || end - start, width: p.width || c.width, height: p.height || c.height });
+    let final = out;
+    if (needMatte) {
+      // Find the person in every frame, then relight them and/or put them on the new background.
+      try {
+        const what = background ? "Removing the background" : "Finding the speaker for studio lighting";
+        await ctx.update({ stage: `${what} (clip ${i + 1})` });
+        const matte = out.replace(/\.mp4$/, "-matte.mp4");
+        await makeMatte(out, matte, (p) => void ctx.update({ stage: `${what} (clip ${i + 1}): ${Math.round(p * 100)}%` }).catch(() => undefined));
+        const finished = out.replace(/\.mp4$/, "-studio.mp4");
+        await ctx.update({ stage: background ? `Placing on the new background with studio lighting (clip ${i + 1})` : `Adding studio lighting (clip ${i + 1})` });
+        await finishSubject(out, matte, background, finished, { relight, crf: q.crf, preset: q.preset, canvas });
+        final = finished;
+        if (background) c.onSet = true;
+      } catch (e) {
+        log("Studio finishing failed, keeping the original:", e instanceof Error ? e.message : String(e));
+      }
+    }
+    const p = await probe(final);
+    Object.assign(c, { file: final, fileStart: start, fileLength: p.duration || end - start, width: p.width || c.width, height: p.height || c.height });
   }
 }
 
@@ -822,6 +919,10 @@ function editPromptFor(ctx: Ctx, req: EditSpec["request"], clips: PreparedClip[]
     focus: req.focus ?? "",
     hookOptions: req.hookOptions ?? 1,
     autoColor: req.autoColor ?? true,
+    background: req.background?.mode ?? "none",
+    format: req.format ?? "reel",
+    fullLength: !!req.fullLength,
+    editStyle: req.editStyle ?? "professional",
   });
 }
 
@@ -929,7 +1030,10 @@ interface RenderOpts {
 function buildEditProps(ctx: Ctx, spec: EditSpec, clips: PreparedClip[], url: (f: string) => string, brand: BrandProps): ClipEditProps {
   const s = ctx.settings;
   const { plan, request: req } = spec;
-  const layout = spec.layout ?? (req.layout === "auto" ? plan.layout : req.layout);
+  let layout = spec.layout ?? (req.layout === "auto" ? plan.layout : req.layout);
+  // A vertical phone video in a horizontal YouTube frame: keep the whole shot over a blurred fill.
+  const yt = (req.format ?? "reel") === "youtube";
+  if (yt && !spec.layout && req.layout === "auto" && clips.some((c) => !c.onSet && !c.isImage && c.height > c.width * 1.1)) layout = "blur-pad";
   const gradeIndex = new Map<number, number>();
   const grades: NonNullable<ClipEditProps["grades"]> = [];
   if (req.autoColor !== false) {
@@ -973,11 +1077,12 @@ function buildEditProps(ctx: Ctx, spec: EditSpec, clips: PreparedClip[], url: (f
       zoom: seg.zoom,
       layout,
       textOverlay: seg.textOverlay?.trim() || undefined,
-      focusX: seg.focusX === undefined ? undefined : clamp(seg.focusX, 0, 1),
-      focusY: seg.focusY === undefined ? undefined : clamp(seg.focusY, 0, 1),
-      focusEndX: seg.focusEndX === undefined ? undefined : clamp(seg.focusEndX, 0, 1),
-      focusEndY: seg.focusEndY === undefined ? undefined : clamp(seg.focusEndY, 0, 1),
-      crop: seg.crop === undefined ? undefined : clamp(seg.crop, 1, 1.8),
+      // On a virtual set the shot is already composed: only gentle moves on top.
+      focusX: c.onSet ? 0.5 : seg.focusX === undefined ? undefined : clamp(seg.focusX, 0, 1),
+      focusY: c.onSet ? 0.4 : seg.focusY === undefined ? undefined : clamp(seg.focusY, 0, 1),
+      focusEndX: c.onSet ? 0.5 : seg.focusEndX === undefined ? undefined : clamp(seg.focusEndX, 0, 1),
+      focusEndY: c.onSet ? 0.4 : seg.focusEndY === undefined ? undefined : clamp(seg.focusEndY, 0, 1),
+      crop: c.onSet ? Math.min(seg.crop ?? 1, 1.1) : seg.crop === undefined ? undefined : clamp(seg.crop, 1, 1.8),
       grade: gradeIndex.get(c.index),
       audioFadeIn: continuous(prev, seg) ? 0 : 3,
       audioFadeOut: continuous(seg, next) ? 0 : next ? 3 : 18,
@@ -1046,6 +1151,8 @@ function buildEditProps(ctx: Ctx, spec: EditSpec, clips: PreparedClip[], url: (f
   const endCard = (spec.branding ?? req.branding)?.endCard;
   const claudeLine = endCard ? endCard.claudeWrites : s.brand.outro.claudeWrites;
   return {
+    format: req.format ?? "reel",
+    editStyle: req.editStyle ?? "professional",
     segments,
     transition,
     captions: {
@@ -1076,7 +1183,7 @@ async function renderEditSpec(ctx: Ctx, spec: EditSpec, clips: PreparedClip[], u
   const brand = await brandProps(ctx, url, spec.branding ?? spec.request.branding);
   const props = buildEditProps(ctx, spec, clips, url, brand);
   const songLike = spec.plan.style === "worship" || !!props.audioBed || (props.lyrics?.length ?? 0) > 0;
-  if (s.captions.soundEffects && !songLike && spec.plan.style !== "sermon") {
+  if (s.captions.soundEffects && spec.request.editStyle === "creator" && !songLike && spec.plan.style !== "sermon") {
     const f = await makeSfx(sub("sfx"));
     const dir = path.join(ctx.work, "sfx");
     fs.mkdirSync(dir, { recursive: true });
@@ -1091,9 +1198,15 @@ async function renderEditSpec(ctx: Ctx, spec: EditSpec, clips: PreparedClip[], u
   const base = safeName(spec.plan.title || "edit") + (ro.label ? `-${safeName(ro.label, 12)}` : "");
   const slug = base + (lineage.version && lineage.version > 1 ? `-v${lineage.version}` : "");
   const master = path.join(ctx.work, `${slug}-master.mp4`);
-  let duration = await renderClipEdit(props, master, (p) => {
-    void ctx.update({ progress: from + span * 0.8 * p }).catch(() => undefined);
-  });
+  const rq = qualityOf(spec.request);
+  let duration = await renderClipEdit(
+    props,
+    master,
+    (p) => {
+      void ctx.update({ progress: from + span * 0.8 * p }).catch(() => undefined);
+    },
+    rq,
+  );
 
   if (ro.qa) {
     // Claude watches the result and fixes what's wrong, once.
@@ -1114,7 +1227,7 @@ async function renderEditSpec(ctx: Ctx, spec: EditSpec, clips: PreparedClip[], u
         const fixed = buildEditProps(ctx, spec, clips, url, brand);
         fixed.sfx = props.sfx;
         await ctx.update({ stage: `Fixing: ${review.problems.slice(0, 2).join("; ").slice(0, 120)}`, progress: from + span * 0.85 });
-        duration = await renderClipEdit(fixed, master);
+        duration = await renderClipEdit(fixed, master, undefined, rq);
       }
     } catch (e) {
       log("Quality check skipped:", e instanceof Error ? e.message : String(e));
@@ -1138,6 +1251,7 @@ async function renderEditSpec(ctx: Ctx, spec: EditSpec, clips: PreparedClip[], u
     mood: spec.plan.mood,
     hasVoice: props.keepAudio && masterHasAudio,
     noMusicUnderVoice: songLike,
+    format: spec.request.format ?? "reel",
     folderId,
     spec,
     needsReview: asrTelugu,

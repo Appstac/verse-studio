@@ -39,19 +39,22 @@ export const Signature: React.FC<{ brand: BrandProps; color: string; hideAfterFr
     hideAfterFrame !== undefined
       ? interpolate(frame, [hideAfterFrame, hideAfterFrame + 10], [1, 0], { extrapolateLeft: "clamp", extrapolateRight: "clamp" })
       : 1;
-  const isSlide = h < 1500;
+  const { width } = useVideoConfig();
+  const land = width > h;
+  const isSlide = !land && h < 1500;
   const pos: React.CSSProperties = {};
   const p = brand.position;
-  if (p.startsWith("bottom")) pos.bottom = isSlide ? 56 : 360;
-  else pos.top = isSlide ? 56 : 170;
-  if (p.endsWith("left")) pos.left = 84;
-  else if (p.endsWith("right")) pos.right = isSlide ? 84 : 170;
+  // Reels: keep clear of Instagram's buttons and caption. YouTube: close to the edges.
+  if (p.startsWith("bottom")) pos.bottom = land ? 60 : isSlide ? 56 : 360;
+  else pos.top = land ? 50 : isSlide ? 56 : 170;
+  if (p.endsWith("left")) pos.left = land ? 70 : 84;
+  else if (p.endsWith("right")) pos.right = land ? 70 : isSlide ? 84 : 170;
   else {
     pos.left = 0;
     pos.right = 0;
   }
   const justify = p.endsWith("left") ? "flex-start" : p.endsWith("right") ? "flex-end" : "center";
-  const size = (wm?.size ?? 32) * (isSlide ? 0.85 : 1);
+  const size = (wm?.size ?? 32) * (isSlide ? 0.85 : land ? 0.9 : 1);
   const ink = wm?.color || color;
   const style = wm?.style ?? "shadow";
   const textStyle: React.CSSProperties = {

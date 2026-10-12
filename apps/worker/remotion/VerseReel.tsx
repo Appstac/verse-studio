@@ -27,6 +27,8 @@ const Hook: React.FC<{ text: string; frames: number; font: string; weight: numbe
   telugu,
 }) => {
   const frame = useCurrentFrame();
+  const { width, height } = useVideoConfig();
+  const land = width > height;
   if (frame > frames + 10) return null;
   const inO = interpolate(frame, [0, 7], [0, 1], { extrapolateRight: "clamp" });
   const outO = interpolate(frame, [frames - 6, frames + 6], [1, 0], { extrapolateLeft: "clamp", extrapolateRight: "clamp" });
@@ -34,7 +36,7 @@ const Hook: React.FC<{ text: string; frames: number; font: string; weight: numbe
   const blur = interpolate(frame, [frames - 6, frames + 6], [0, 10], { extrapolateLeft: "clamp", extrapolateRight: "clamp" });
   const size = Math.max(58, Math.min(92, 112 - text.length * 0.9)) * (telugu ? 0.82 : 1);
   return (
-    <AbsoluteFill style={{ alignItems: "center", justifyContent: "center", padding: "260px 100px 460px" }}>
+    <AbsoluteFill style={{ alignItems: "center", justifyContent: "center", padding: land ? "120px 260px 150px" : "260px 100px 460px" }}>
       <div
         style={{
           fontFamily: font,
@@ -59,7 +61,7 @@ const Hook: React.FC<{ text: string; frames: number; font: string; weight: numbe
 
 export const VerseReel: React.FC<VerseReelProps> = (props) => {
   const frame = useCurrentFrame();
-  const { fps, durationInFrames } = useVideoConfig();
+  const { fps, durationInFrames, width, height } = useVideoConfig();
   const te = props.language === "telugu";
   const st = presetStyle(props.preset, props.language, props.brand.accent);
   const minimal = props.preset === "minimal";
@@ -105,7 +107,7 @@ export const VerseReel: React.FC<VerseReelProps> = (props) => {
             style={{
               alignItems: "center",
               justifyContent: "center",
-              padding: "250px 96px 470px",
+              padding: width > height ? "110px 240px 150px" : "250px 96px 470px",
               opacity: outroFade,
               transform: `scale(${push})`,
             }}

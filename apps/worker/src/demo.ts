@@ -147,7 +147,7 @@ async function main() {
   const ts = new Date().toISOString();
   const base = { status: "queued" as const, source: "manual" as const, createdAt: ts, updatedAt: ts, stage: "", progress: 0, outputs: [], log: [], attempts: 0 };
   const jobs: Job[] = [
-    { ...base, id: newJobId(), request: { type: "verse", count: 2, theme: "", language: "mixed", preset: "auto", references: [], instructions: "" } },
+    { ...base, id: newJobId(), request: { type: "verse", format: (process.env.DEMO_FORMAT as "reel" | "youtube") || "reel", bothFormats: false, quality: "standard", count: 2, theme: "", language: "mixed", preset: "auto", references: [], instructions: "" } },
     { ...base, id: newJobId(), request: { type: "carousel", topic: "", slides: 4, language: "english", preset: "auto" } },
     {
       ...base,
@@ -174,6 +174,11 @@ async function main() {
           watermark: { enabled: true, text: "@tanishka.guduru", font: "handwritten", size: 48, position: "bottom-right", opacity: 0.9, style: "shadow", color: "#ffffff", showLogo: false },
           endCard: { enabled: true, title: "Tanishka Guduru", text: "Follow for daily worship\nShare with someone who needs this", seconds: 2, showLogo: true, claudeWrites: false },
         },
+        format: (process.env.DEMO_FORMAT as "reel" | "youtube") || "reel",
+        quality: "standard",
+        ...(process.env.DEMO_BG
+          ? { inputFileIds: ["Uploads/talk.mp4"], inputNames: ["talk.mp4"], editType: "talking", background: { mode: "studio", preset: process.env.DEMO_BG } }
+          : {}),
         captionChoice: { style: "lyrics", look: { font: "elegant", color: "#ffffff", highlight: "", size: "medium", position: "lower", background: "shadow", uppercase: false } },
       }),
     },

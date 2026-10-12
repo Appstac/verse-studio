@@ -120,7 +120,7 @@ const OverlayText: React.FC<{ text: string; frames: number }> = ({ text, frames 
   const o = interpolate(frame, [0, 8, frames - 8, frames], [0, 1, 1, 0], { extrapolateLeft: "clamp", extrapolateRight: "clamp" });
   const te = isTelugu(text);
   return (
-    <AbsoluteFill style={{ justifyContent: "flex-start", alignItems: "center", paddingTop: 300 }}>
+    <AbsoluteFill style={{ justifyContent: "flex-start", alignItems: "center", paddingTop: LAND ? 100 : 300 }}>
       <div
         style={{
           opacity: o,
@@ -142,6 +142,36 @@ const OverlayText: React.FC<{ text: string; frames: number }> = ({ text, frames 
   );
 };
 
+// Professional opener: an elegant title over a soft gradient, fading in and out.
+const ProTitle: React.FC<{ text: string; accent: string }> = ({ text, accent }) => {
+  const frame = useCurrentFrame();
+  const o = interpolate(frame, [0, 12, 66, 84], [0, 1, 1, 0], { extrapolateLeft: "clamp", extrapolateRight: "clamp" });
+  const y = interpolate(frame, [0, 18], [14, 0], { extrapolateRight: "clamp", easing: Easing.out(Easing.cubic) });
+  const line = interpolate(frame, [6, 30], [0, LAND ? 220 : 160], { extrapolateLeft: "clamp", extrapolateRight: "clamp", easing: Easing.out(Easing.cubic) });
+  const te = isTelugu(text);
+  return (
+    <AbsoluteFill style={{ justifyContent: "flex-start", alignItems: "center", paddingTop: LAND ? 70 : 240, opacity: o }}>
+      <AbsoluteFill style={{ background: `linear-gradient(180deg, rgba(0,0,0,0.55) 0%, rgba(0,0,0,0) ${LAND ? 32 : 30}%)` }} />
+      <div style={{ transform: `translateY(${y}px)`, maxWidth: LAND ? 1500 : 900, textAlign: "center" }}>
+        <div
+          style={{
+            fontFamily: te ? FONTS.teluguSerif : FONTS.display,
+            fontWeight: 500,
+            fontSize: te ? 52 : LAND ? 62 : 64,
+            lineHeight: te ? 1.45 : 1.15,
+            color: "#fff",
+            letterSpacing: te ? 0 : 0.5,
+            textShadow: "0 2px 18px rgba(0,0,0,0.55)",
+          }}
+        >
+          {text}
+        </div>
+        <div style={{ margin: "18px auto 0", height: 2, width: line, background: accent, opacity: 0.9 }} />
+      </div>
+    </AbsoluteFill>
+  );
+};
+
 const Hook: React.FC<{ text: string; look: CaptionLookProps }> = ({ text, look }) => {
   const frame = useCurrentFrame();
   const o = interpolate(frame, [0, 6, 60, 72], [0, 1, 1, 0], { extrapolateLeft: "clamp", extrapolateRight: "clamp" });
@@ -149,12 +179,12 @@ const Hook: React.FC<{ text: string; look: CaptionLookProps }> = ({ text, look }
   const te = isTelugu(text);
   const hand = look.font === "handwritten" || look.font === "elegant";
   return (
-    <AbsoluteFill style={{ justifyContent: "flex-start", alignItems: "center", paddingTop: 280 }}>
+    <AbsoluteFill style={{ justifyContent: "flex-start", alignItems: "center", paddingTop: LAND ? 90 : 280 }}>
       <div
         style={{
           opacity: o,
           transform: `translateY(${y}px)`,
-          maxWidth: 900,
+          maxWidth: LAND ? 1400 : 900,
           padding: "22px 38px",
           borderRadius: 26,
           background: "rgba(255,255,255,0.94)",
@@ -173,8 +203,15 @@ const Hook: React.FC<{ text: string; look: CaptionLookProps }> = ({ text, look }
   );
 };
 
-// Where on-video text sits. Instagram's buttons cover the bottom ~20% and right edge.
+// Where on-video text sits. Reels: Instagram's buttons cover the bottom ~20% and the
+// right edge. YouTube: captions sit low like subtitles, clear of the progress bar.
+let LAND = false;
 function placement(look: CaptionLookProps): React.CSSProperties {
+  if (LAND) {
+    if (look.position === "upper") return { justifyContent: "flex-start", alignItems: "center", paddingTop: 110 };
+    if (look.position === "lower") return { justifyContent: "flex-end", alignItems: "center", paddingBottom: 110 };
+    return { justifyContent: "center", alignItems: "center", paddingTop: 200 };
+  }
   if (look.position === "upper") return { justifyContent: "flex-start", alignItems: "center", paddingTop: 400 };
   if (look.position === "lower") return { justifyContent: "flex-end", alignItems: "center", paddingBottom: 470 };
   return { justifyContent: "center", alignItems: "center", paddingTop: 260 };
@@ -182,7 +219,7 @@ function placement(look: CaptionLookProps): React.CSSProperties {
 
 function textBox(look: CaptionLookProps, te: boolean): React.CSSProperties {
   return {
-    maxWidth: 920,
+    maxWidth: LAND ? 1500 : 920,
     textAlign: "center",
     color: look.color || "#fff",
     textTransform: look.uppercase && !te ? "uppercase" : undefined,
@@ -266,7 +303,7 @@ const PopCaptions: React.FC<{ props: ClipEditProps; accent: string; look: Captio
   const hi = look.highlight || accent;
   const pos = placement(look);
   return (
-    <AbsoluteFill style={look.position === "middle" ? { justifyContent: "center", alignItems: "center", paddingTop: 520 } : pos}>
+    <AbsoluteFill style={look.position === "middle" ? { justifyContent: "center", alignItems: "center", paddingTop: LAND ? 360 : 520 } : pos}>
       <div
         style={{
           ...textBox(look, te),
@@ -288,7 +325,7 @@ const PopCaptions: React.FC<{ props: ClipEditProps; accent: string; look: Captio
                 fontFamily: isEmph && !te ? FONTS.display : fontFor(look.font === "bold" ? "clean" : look.font, te),
                 fontStyle: isEmph && !te ? "italic" : "normal",
                 fontWeight: isEmph ? 500 : 700,
-                fontSize: (te ? 80 : long ? 104 : 128) * (isEmph ? 1.08 : 1) * SIZE[look.size],
+                fontSize: (te ? 80 : long ? 104 : 128) * (isEmph ? 1.08 : 1) * SIZE[look.size] * (LAND ? 0.8 : 1),
                 letterSpacing: isEmph || look.font === "handwritten" ? 0 : -3,
               }}
             >
@@ -345,8 +382,8 @@ const TitleCard: React.FC<{ title: string; subtitle?: string; accent: string; fr
       <div
         style={{
           position: "absolute",
-          left: 70,
-          top: 230,
+          left: LAND ? 80 : 70,
+          top: LAND ? 60 : 230,
           opacity: o,
           transform: `translateX(${x}px)`,
           display: "flex",
@@ -377,10 +414,17 @@ const OverlayCard: React.FC<{ o: Overlay; frames: number; tilt: number }> = ({ o
   const inS = spring({ frame, fps, config: { damping: 12, mass: 0.6 } });
   const out = interpolate(frame, [frames - 8, frames], [1, 0], { extrapolateLeft: "clamp", extrapolateRight: "clamp" });
   const s = inS * out;
-  const w = o.position === "corner" ? width * 0.42 : width * 0.66;
-  const h = Math.min(w / Math.max(0.4, o.aspect), o.position === "center" ? 1100 : 700);
-  const pos: React.CSSProperties =
-    o.position === "corner" ? { top: 230, right: 70 } : o.position === "top" ? { top: 210, left: (width - w) / 2 } : { top: 520, left: (width - w) / 2 };
+  const w = LAND ? (o.position === "corner" ? width * 0.3 : width * 0.42) : o.position === "corner" ? width * 0.42 : width * 0.66;
+  const h = Math.min(w / Math.max(0.4, o.aspect), LAND ? 640 : o.position === "center" ? 1100 : 700);
+  const pos: React.CSSProperties = LAND
+    ? o.position === "corner"
+      ? { top: 90, right: 90 }
+      : { top: 120, right: 120 }
+    : o.position === "corner"
+      ? { top: 230, right: 70 }
+      : o.position === "top"
+        ? { top: 210, left: (width - w) / 2 }
+        : { top: 520, left: (width - w) / 2 };
   return (
     <AbsoluteFill>
       <div
@@ -409,6 +453,9 @@ const OverlayCard: React.FC<{ o: Overlay; frames: number; tilt: number }> = ({ o
 };
 
 export const ClipEdit: React.FC<ClipEditProps> = (props) => {
+  const cfg = useVideoConfig();
+  // Set once per render: every text helper above reads it.
+  LAND = cfg.width > cfg.height;
   const st = presetStyle(props.preset, props.captions.language, props.brand.accent);
   const segs = props.segments;
   const look = { ...DEFAULT_LOOK, ...(props.captions.look ?? {}) };
@@ -426,9 +473,11 @@ export const ClipEdit: React.FC<ClipEditProps> = (props) => {
   }
   const bed = props.audioBed;
   const segAudio = props.keepAudio && !bed;
-  const captionStyle = props.captions.style;
+  const pro = props.editStyle !== "creator";
+  // Professional: never the bouncy pop-up words; clean subtitle lines instead.
+  const captionStyle = pro && props.captions.style === "pop" ? "lines" : props.captions.style;
   const hasLyrics = (props.lyrics?.length ?? 0) > 0;
-  const titleFrom = props.hook ? 75 : 12;
+  const titleFrom = props.hook ? 90 : 12;
   return (
     <FontGate>
       <AbsoluteFill style={{ background: "#000" }}>
@@ -465,14 +514,14 @@ export const ClipEdit: React.FC<ClipEditProps> = (props) => {
           ) : captionStyle === "none" || props.captions.words.length === 0 ? null : captionStyle === "pop" ? (
             <PopCaptions props={props} accent={props.brand.accent} look={look} />
           ) : (
-            <Captions props={props} accent={props.brand.accent} look={look} />
+            <Captions props={{ ...props, captions: { ...props.captions, style: captionStyle } }} accent={props.brand.accent} look={look} />
           )}
           {(props.overlays ?? []).map((o, i) => {
             const from = Math.round(o.at * FPS);
             const dur = Math.max(FPS, Math.round(o.duration * FPS));
             return (
               <Sequence key={`ov${i}`} from={from} durationInFrames={dur}>
-                <OverlayCard o={o} frames={dur} tilt={i % 2 ? 2.5 : -2.5} />
+                <OverlayCard o={o} frames={dur} tilt={pro ? 0 : i % 2 ? 2.5 : -2.5} />
                 {props.sfx?.pop ? <Audio src={props.sfx.pop} volume={0.55} /> : null}
               </Sequence>
             );
@@ -489,7 +538,7 @@ export const ClipEdit: React.FC<ClipEditProps> = (props) => {
               <TitleCard title={props.titleCard.title} subtitle={props.titleCard.subtitle} accent={props.brand.accent} frames={Math.min(135, body - titleFrom)} />
             </Sequence>
           ) : null}
-          {props.hook ? <Hook text={props.hook} look={look} /> : null}
+          {props.hook ? pro ? <ProTitle text={props.hook} accent={props.brand.accent} /> : <Hook text={props.hook} look={look} /> : null}
           <Signature brand={props.brand} color="#ffffff" />
         </Sequence>
         {outroFrames > 0 ? (

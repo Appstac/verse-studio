@@ -24,6 +24,7 @@ import {
   writeLocalControl,
 } from "./supervisor";
 
+const ENV_PIXABAY = !!process.env.PIXABAY_API_KEY;
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 function zonedParts(tz: string, d = new Date()) {
@@ -80,6 +81,8 @@ export class Engine {
       try {
         settings = await this.store.getSettings();
         this.intervalSeconds = settings.advanced.pollSeconds;
+        // A Pixabay key saved on the website works here too (the .env one wins).
+        if (!ENV_PIXABAY) process.env.PIXABAY_API_KEY = settings.advanced.pixabayKey || "";
         markProgress();
         if (await this.applyControl()) return;
         if (this.control.paused) {
@@ -225,6 +228,9 @@ export class Engine {
         updatedAt: ts,
         request: {
           type: "verse",
+          format: s.auto.format === "youtube" ? "youtube" : "reel",
+          bothFormats: s.auto.format === "both",
+          quality: s.auto.quality,
           count: s.auto.reelsPerDay,
           theme: "",
           language: s.auto.teluguPercent >= 100 ? "telugu" : s.auto.teluguPercent <= 0 ? "english" : "mixed",

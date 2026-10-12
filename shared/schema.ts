@@ -34,16 +34,81 @@ export const WatermarkStyle = z.enum(["plain", "shadow", "pill", "outline"]);
 
 export const CAPTION_STYLES = ["pop", "karaoke", "lines", "lyrics", "none"] as const;
 export const CaptionLook = z.object({
-  font: TextFont.default("bold"),
+  font: TextFont.default("clean"),
   color: z.string().default("#ffffff"),
   // Highlight for key words; empty = the brand highlight colour.
   highlight: z.string().default(""),
   size: z.enum(["small", "medium", "large"]).default("medium"),
-  position: z.enum(["upper", "middle", "lower"]).default("middle"),
+  position: z.enum(["upper", "middle", "lower"]).default("lower"),
   background: z.enum(["none", "shadow", "box"]).default("shadow"),
   uppercase: z.boolean().default(false),
 });
 export type CaptionLook = z.infer<typeof CaptionLook>;
+
+// Vertical for Instagram/TikTok/Shorts, horizontal for YouTube.
+export const FORMATS = ["reel", "youtube"] as const;
+export const VideoFormat = z.enum(FORMATS);
+export type VideoFormat = z.infer<typeof VideoFormat>;
+export const FORMAT_LABEL: Record<VideoFormat, string> = { reel: "Reel (vertical 9:16)", youtube: "YouTube (horizontal 16:9)" };
+
+// Virtual green screen: put the person on a new background.
+export const BG_MODES = ["none", "blur", "studio", "stock", "mine", "color"] as const;
+export const BackgroundChoice = z.object({
+  mode: z.enum(BG_MODES).default("none"),
+  // studio: a built-in backdrop id like "beams-royal" (see shared/backdrops.ts)
+  preset: z.string().default("beams-royal"),
+  // stock: a Pixabay photo or video picked in the browser
+  stockId: z.number().int().optional(),
+  stockKind: z.enum(["photo", "video"]).default("photo"),
+  stockThumb: z.string().optional(),
+  // Soft camera-style blur on photo/video backgrounds so they read as "behind" the speaker.
+  depthBlur: z.boolean().default(true),
+  // mine: a file from the Backgrounds folder
+  mineFileId: z.string().optional(),
+  mineName: z.string().optional(),
+  color: z.string().default("#1b2a6b"),
+});
+export type BackgroundChoice = z.infer<typeof BackgroundChoice>;
+
+export const EDIT_TYPES = ["auto", "worship", "talking", "sermon", "montage"] as const;
+export type EditType = (typeof EDIT_TYPES)[number];
+// Professional = broadcast-style finish (no sound effects, clean subtitles, elegant titles, dissolves).
+// Creator = energetic social style (pop-up words, punch zooms, whooshes) for when that's wanted.
+export const EDIT_STYLES = ["professional", "creator"] as const;
+export const EditStyle = z.enum(EDIT_STYLES);
+export type EditStyle = z.infer<typeof EditStyle>;
+
+export const QUALITIES = ["standard", "high", "ultra"] as const;
+export const Quality = z.enum(QUALITIES);
+export const QUALITY_LABEL: Record<(typeof QUALITIES)[number], string> = {
+  standard: "Standard (fastest)",
+  high: "High (1080p, best for Instagram)",
+  ultra: "Ultra HD 4K (YouTube, slowest)",
+};
+
+export const EditDefaults = z.object({
+      layout: z.enum(["fill", "blur-pad", "auto"]).default("auto"),
+      defaultSeconds: z.number().min(5).max(3600).default(30),
+      format: VideoFormat.default("reel"),
+      youtubeSeconds: z.number().min(30).max(3600).default(480),
+      fullLength: z.boolean().default(false),
+      editType: z.enum(EDIT_TYPES).default("auto"),
+      editStyle: EditStyle.default("professional"),
+      quality: Quality.default("high"),
+      relight: z.boolean().default(true),
+      background: BackgroundChoice.prefault({}),
+      stabilize: z.enum(["auto", "on", "off"]).default("auto"),
+      cleanAudio: z.boolean().default(true),
+      autoColor: z.boolean().default(true),
+      qualityCheck: z.boolean().default(false),
+      captions: z.boolean().default(true),
+      captionLanguage: z.enum(["auto", "en", "te"]).default("auto"),
+      keepOriginalAudio: z.boolean().default(true),
+      hookOptions: z.number().int().min(1).max(3).default(1),
+      extraLengths: z.array(z.number().min(6).max(3600)).max(3).default([]),
+      alsoCarousel: z.boolean().default(false),
+});
+export type EditDefaults = z.infer<typeof EditDefaults>;
 
 export const Settings = z.object({
   version: z.number().default(1),
@@ -79,6 +144,9 @@ export const Settings = z.object({
     .object({
       enabled: z.boolean().default(false),
       reelsPerDay: z.number().int().min(0).max(20).default(2),
+      // Auto-made verse videos: vertical, horizontal or both of each.
+      format: z.enum(["reel", "youtube", "both"]).default("reel"),
+      quality: Quality.default("high"),
       carouselsPerWeek: z.number().int().min(0).max(7).default(1),
       runAt: z.string().regex(/^\d{2}:\d{2}$/).default("05:30"),
       timezone: z.string().default("America/Chicago"),
@@ -123,8 +191,8 @@ export const Settings = z.object({
       alwaysHashtags: z.array(z.string()).default(["#jesuschrist", "#faith"]),
       cta: z.string().default("Type AMEN if this is for you"),
       tone: z.string().default("warm, gentle, encouraging, sincere, never preachy"),
-      onVideoStyle: z.enum(CAPTION_STYLES).default("pop"),
-      soundEffects: z.boolean().default(true),
+      onVideoStyle: z.enum(CAPTION_STYLES).default("lines"),
+      soundEffects: z.boolean().default(false),
       // How on-video text (captions, lyrics, hook, title card) looks. Editable per video too.
       look: CaptionLook.prefault({}),
     })
@@ -136,17 +204,18 @@ export const Settings = z.object({
       showHook: z.boolean().default(true),
     })
     .prefault({}),
-  edit: z
-    .object({
-      layout: z.enum(["fill", "blur-pad"]).default("blur-pad"),
-      defaultSeconds: z.number().min(5).max(90).default(30),
-    })
-    .prefault({}),
+  // Defaults for Make → Edit. The form opens with these; everything can still be changed per video.
+  edit: EditDefaults.prefault({}),
+  // Saved bundles of every edit choice (built-in ones live in code, see BUILTIN_STYLES).
+  stylePresets: z.array(z.lazy(() => StylePreset)).default([]),
+  defaultStyleId: z.string().default("sermon-clip-reel"),
   advanced: z
     .object({
       whisperModel: z.enum(["base", "small", "medium", "large-v3-turbo"]).default("small"),
       claudeModel: z.string().default(""),
       pollSeconds: z.number().int().min(10).max(600).default(20),
+      // Free key from pixabay.com/api/docs: stock backgrounds and footage (website search + studio computer).
+      pixabayKey: z.string().default(""),
     })
     .prefault({}),
 });
@@ -225,8 +294,94 @@ export function captionChoiceFromSettings(s: Settings): CaptionChoice {
   return { style: s.captions.onVideoStyle, look: s.captions.look };
 }
 
+// A saved style: every edit choice in one bundle. Branding/text style left out = use Settings.
+export const StylePreset = z.object({
+  id: z.string(),
+  name: z.string(),
+  description: z.string().default(""),
+  edit: EditDefaults,
+  captionChoice: CaptionChoice.optional(),
+  branding: Branding.optional(),
+});
+export type StylePreset = z.infer<typeof StylePreset>;
+
+const ed = (p: Partial<EditDefaults>): EditDefaults => EditDefaults.parse(p);
+const look = (p: Partial<CaptionLook>): CaptionLook => CaptionLook.parse(p);
+export const BUILTIN_STYLES: StylePreset[] = [
+  {
+    id: "sermon-clip-reel",
+    name: "Sermon clip · Reel",
+    description: "The strongest 30-45 s of a message, studio-lit, clean subtitles.",
+    edit: ed({ format: "reel", editType: "sermon", defaultSeconds: 40, relight: true, background: BackgroundChoice.parse({ mode: "none" }) }),
+    captionChoice: { style: "lines", look: look({ font: "clean", position: "lower", background: "shadow", size: "medium" }) },
+  },
+  {
+    id: "sermon-youtube",
+    name: "Full sermon · YouTube",
+    description: "Whole message in order, dead air removed, 4K studio finish.",
+    edit: ed({ format: "youtube", editType: "sermon", fullLength: true, youtubeSeconds: 1800, quality: "ultra", relight: true }),
+    captionChoice: { style: "lines", look: look({ font: "clean", position: "lower", background: "box", size: "small" }) },
+  },
+  {
+    id: "sermon-studio-youtube",
+    name: "Studio sermon · YouTube",
+    description: "Speaker on a real studio photo background, key and rim light, 8-10 min highlight.",
+    edit: ed({ format: "youtube", editType: "sermon", youtubeSeconds: 540, quality: "ultra", relight: true, background: BackgroundChoice.parse({ mode: "stock", stockKind: "photo", depthBlur: true }) }),
+    captionChoice: { style: "lines", look: look({ font: "clean", position: "lower", background: "shadow", size: "small" }) },
+  },
+  {
+    id: "worship-reel",
+    name: "Worship song · Reel",
+    description: "Peak of the song, continuous sound, elegant lyric lines, gentle moves.",
+    edit: ed({ format: "reel", editType: "worship", defaultSeconds: 35, relight: false }),
+    captionChoice: { style: "lyrics", look: look({ font: "elegant", position: "lower", background: "shadow" }) },
+  },
+  {
+    id: "worship-youtube",
+    name: "Worship song · YouTube",
+    description: "Full song, horizontal, lyric lines, no music added on top.",
+    edit: ed({ format: "youtube", editType: "worship", fullLength: true, youtubeSeconds: 420, quality: "ultra", relight: false }),
+    captionChoice: { style: "lyrics", look: look({ font: "elegant", position: "lower", background: "shadow" }) },
+  },
+  {
+    id: "testimony-reel",
+    name: "Testimony · Reel",
+    description: "Personal story, best takes, soft background blur, warm studio light.",
+    edit: ed({ format: "reel", editType: "talking", defaultSeconds: 45, relight: true, background: BackgroundChoice.parse({ mode: "blur" }) }),
+    captionChoice: { style: "karaoke", look: look({ font: "clean", position: "lower", background: "shadow" }) },
+  },
+  {
+    id: "devotional-studio",
+    name: "Devotional talk · studio backdrop",
+    description: "Short devotional on a candle-lit worship backdrop with studio lighting.",
+    edit: ed({ format: "reel", editType: "talking", defaultSeconds: 40, relight: true, background: BackgroundChoice.parse({ mode: "studio", preset: "candles-gold" }) }),
+    captionChoice: { style: "lines", look: look({ font: "elegant", position: "lower", background: "shadow" }) },
+  },
+  {
+    id: "event-recap",
+    name: "Church event recap · Reel",
+    description: "Best moments first, varied shots, warm natural colour.",
+    edit: ed({ format: "reel", editType: "montage", defaultSeconds: 30, relight: false, captions: false }),
+  },
+  {
+    id: "creator-energetic",
+    name: "Creator energetic · Reel",
+    description: "Fast social style: pop-up words, punch-ins, sound effects.",
+    edit: ed({ format: "reel", editType: "talking", editStyle: "creator", defaultSeconds: 30, relight: true }),
+    captionChoice: { style: "pop", look: look({ font: "bold", position: "middle", size: "large" }) },
+  },
+];
+
+export function allStyles(s: Settings): StylePreset[] {
+  return [...BUILTIN_STYLES, ...s.stylePresets];
+}
+
 export const VerseRequest = z.object({
   type: z.literal("verse"),
+  format: VideoFormat.default("reel"),
+  // Also make a horizontal (or vertical) copy of every verse video.
+  bothFormats: z.boolean().default(false),
+  quality: Quality.default("high"),
   count: z.number().int().min(1).max(20).default(1),
   theme: z.string().default(""),
   language: Language.default("english"),
@@ -234,14 +389,15 @@ export const VerseRequest = z.object({
   references: z.array(z.string()).default([]),
   instructions: z.string().default(""),
 });
-export const EDIT_TYPES = ["auto", "worship", "talking", "sermon", "montage"] as const;
-export type EditType = (typeof EDIT_TYPES)[number];
 export const EditRequest = z.object({
   type: z.literal("edit"),
   inputFileIds: z.array(z.string()).min(1),
   inputNames: z.array(z.string()).default([]),
   prompt: z.string().default(""),
-  targetSeconds: z.number().min(5).max(90).default(30),
+  targetSeconds: z.number().min(5).max(3600).default(30),
+  format: VideoFormat.default("reel"),
+  // YouTube sermons: keep the whole message in order, only tidy dead air (no highlight cutting).
+  fullLength: z.boolean().default(false),
   layout: z.enum(["fill", "blur-pad", "auto"]).default("auto"),
   captions: z.boolean().default(true),
   captionLanguage: z.enum(["auto", "en", "te"]).default("auto"),
@@ -260,14 +416,19 @@ export const EditRequest = z.object({
   autoColor: z.boolean().default(true),
   // Claude watches the finished reel and fixes problems once before delivering.
   qualityCheck: z.boolean().default(false),
+  quality: Quality.default("high"),
+  editStyle: EditStyle.default("professional"),
+  // Studio key + rim light on the speaker, colour-matched to the backdrop.
+  relight: z.boolean().default(true),
   // Parts of each clip to use (set by trimming in the browser). Missing = whole clip.
   ranges: z.array(z.object({ index: z.number().int(), start: z.number().min(0), end: z.number().min(0) })).default([]),
   // Extra lengths to cut from the same upload, e.g. [15, 60] next to targetSeconds.
-  extraLengths: z.array(z.number().min(6).max(90)).max(3).default([]),
+  extraLengths: z.array(z.number().min(6).max(3600)).max(3).default([]),
   // How many different opening hooks to make (each is a separate version).
   hookOptions: z.number().int().min(1).max(3).default(1),
   branding: Branding.optional(),
   captionChoice: CaptionChoice.optional(),
+  background: BackgroundChoice.prefault({}),
 });
 export const CarouselRequest = z.object({
   type: z.literal("carousel"),
@@ -311,6 +472,7 @@ export type JobStatus = z.infer<typeof JobStatus>;
 export const OutputVariant = z.object({ label: AudioVariant, fileId: z.string(), name: z.string() });
 export const OutputItem = z.object({
   kind: z.enum(["reel", "carousel"]),
+  format: VideoFormat.optional(),
   title: z.string(),
   caption: z.string(),
   hashtags: z.array(z.string()),

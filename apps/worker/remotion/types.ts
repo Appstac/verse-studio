@@ -4,6 +4,13 @@
 export type PresetName = "dawn" | "night" | "paper" | "minimal" | "garden" | "photo" | "footage";
 export type Lang = "english" | "telugu";
 
+// Instagram/TikTok vertical, or YouTube horizontal.
+export type VideoFormat = "reel" | "youtube";
+export const FORMAT_SIZE: Record<VideoFormat, { width: number; height: number }> = {
+  reel: { width: 1080, height: 1920 },
+  youtube: { width: 1920, height: 1080 },
+};
+
 export type TextFontName = "clean" | "bold" | "elegant" | "classic" | "handwritten";
 
 export type BrandProps = {
@@ -51,6 +58,7 @@ export type MediaRef = {
 }
 
 export type VerseReelProps = {
+  format?: VideoFormat;
   preset: PresetName;
   language: Lang;
   hook?: string;
@@ -115,6 +123,9 @@ export type Overlay = {
 };
 
 export type ClipEditProps = {
+  format?: VideoFormat;
+  // "professional": clean titles, subtitle captions, no bounce; "creator": energetic social style.
+  editStyle?: "professional" | "creator";
   segments: ClipSegment[];
   transition: "cut" | "fade";
   captions: {
@@ -158,3 +169,6 @@ export function verseReelFrames(p: VerseReelProps): number {
   const outro = p.brand.outro.enabled ? p.brand.outro.seconds : 0;
   return Math.round((p.hookSeconds + p.verseSeconds + outro) * FPS);
 }
+
+export { BACKDROP_LIGHTS, BACKDROP_PALETTES } from "../../../shared/backdrops";
+export type BackdropProps = { light: string; palette: string; atFrame?: number; format?: VideoFormat };

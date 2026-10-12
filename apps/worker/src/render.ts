@@ -24,6 +24,7 @@ function templatesHash(): string {
     }
   };
   walk(path.join(here, "..", "remotion"));
+  h.update(fs.readFileSync(path.join(here, "..", "..", "..", "shared", "backdrops.ts")));
   try {
     h.update(fs.readFileSync(path.join(here, "..", "package.json")));
   } catch {
@@ -74,7 +75,14 @@ function prepareBrowser() {
 const cores = os.availableParallelism?.() ?? os.cpus().length;
 const concurrency = Math.max(2, Math.min(8, cores - 1));
 
-async function renderVideo(id: string, inputProps: Record<string, unknown>, out: string, onProgress?: (p: number) => void) {
+export interface RenderQuality {
+  crf: number;
+  preset: string;
+  scale: number;
+}
+const DEFAULT_Q: RenderQuality = { crf: 18, preset: "veryfast", scale: 1 };
+
+async function renderVideo(id: string, inputProps: Record<string, unknown>, out: string, onProgress?: (p: number) => void, q: RenderQuality = DEFAULT_Q) {
   await prepareBrowser();
   const url = await getServeUrl();
   const composition = await selectComposition({ serveUrl: url, id, inputProps, browserExecutable });
@@ -86,8 +94,11 @@ async function renderVideo(id: string, inputProps: Record<string, unknown>, out:
     inputProps,
     browserExecutable,
     concurrency,
-    crf: 18,
-    x264Preset: "veryfast",
+    crf: q.crf,
+    x264Preset: q.preset as "veryfast",
+    // Ultra HD: the whole frame (text, graphics, video) is drawn at 2x, i.e. 4K.
+    scale: q.scale,
+    videoBitrate: null,
     offthreadVideoThreads: Math.min(4, Math.max(2, Math.floor(cores / 2))),
     pixelFormat: "yuv420p",
     audioBitrate: "192k",
@@ -99,12 +110,12 @@ async function renderVideo(id: string, inputProps: Record<string, unknown>, out:
   return composition.durationInFrames / composition.fps;
 }
 
-export function renderVerseReel(props: VerseReelProps, out: string, onProgress?: (p: number) => void) {
-  return renderVideo("VerseReel", props as unknown as Record<string, unknown>, out, onProgress);
+export function renderVerseReel(props: VerseReelProps, out: string, onProgress?: (p: number) => void, q?: RenderQuality) {
+  return renderVideo("VerseReel", props as unknown as Record<string, unknown>, out, onProgress, q);
 }
 
-export function renderClipEdit(props: ClipEditProps, out: string, onProgress?: (p: number) => void) {
-  return renderVideo("ClipEdit", props as unknown as Record<string, unknown>, out, onProgress);
+export function renderClipEdit(props: ClipEditProps, out: string, onProgress?: (p: number) => void, q?: RenderQuality) {
+  return renderVideo("ClipEdit", props as unknown as Record<string, unknown>, out, onProgress, q);
 }
 
 export async function renderSlide(props: SlideProps, out: string) {
@@ -131,4 +142,27 @@ export async function renderCover(props: VerseReelProps, out: string, atSeconds:
     imageFormat: "jpeg",
     jpegQuality: 90,
   });
+}
+
+/** Renders a looping 8-second backdrop video once and keeps it (worship studio presets). */
+export async function renderBackdrop(light: string, palette: string, format: "reel" | "youtube" = "reel"): Promise<string> {
+  const out = path.join(sub("backdrops"), `${light}-${palette}-${format}.mp4`);
+  if (fs.existsSync(out) && fs.statSync(out).size > 10000) return out;
+  await prepareBrowser();
+  const url = await getServeUrl();
+  const inputProps = { light, palette, format };
+  const composition = await selectComposition({ serveUrl: url, id: "Backdrop", inputProps, browserExecutable });
+  const tmp = `${out}.tmp.mp4`;
+  await renderMedia({ composition, serveUrl: url, codec: "h264", outputLocation: tmp, inputProps, browserExecutable, concurrency, crf: 20, x264Preset: "veryfast", muted: true, imageFormat: "jpeg", jpegQuality: 90 });
+  fs.renameSync(tmp, out);
+  return out;
+}
+
+/** Small preview pictures of backdrops (used to build the website's picker). */
+export async function renderBackdropStill(light: string, palette: string, out: string, frame = 70, format: "reel" | "youtube" = "reel") {
+  await prepareBrowser();
+  const url = await getServeUrl();
+  const inputProps = { light, palette, atFrame: frame, format };
+  const composition = await selectComposition({ serveUrl: url, id: "BackdropStill", inputProps, browserExecutable });
+  await renderStill({ composition, serveUrl: url, output: out, inputProps, browserExecutable, frame: 0, scale: 0.25, imageFormat: "jpeg", jpegQuality: 78 });
 }
