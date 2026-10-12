@@ -44,6 +44,8 @@ const CAPTION_STYLE_LABEL: Record<(typeof CAPTION_STYLES)[number], string> = {
   karaoke: "Karaoke highlight",
   lines: "Full lines",
   lyrics: "Worship lyrics",
+  window: "Lyric window",
+  typewriter: "Typewriter",
   none: "No captions",
 };
 

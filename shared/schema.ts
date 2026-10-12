@@ -32,7 +32,11 @@ export const TextFont = z.enum(TEXT_FONTS);
 export type TextFont = z.infer<typeof TextFont>;
 export const WatermarkStyle = z.enum(["plain", "shadow", "pill", "outline"]);
 
-export const CAPTION_STYLES = ["pop", "karaoke", "lines", "lyrics", "none"] as const;
+// "window": retro pop-up dialog box with typed lyrics; "typewriter": serif story lines typed with a cursor.
+export const CAPTION_STYLES = ["pop", "karaoke", "lines", "lyrics", "window", "typewriter", "none"] as const;
+// Opening title designs. "poster": white card with a colour band, header, big serif title, date.
+// "recap": black screen, big serif word + script word ("JUNE recap") with clip tiles popping in.
+export const TITLE_STYLES = ["card", "poster", "recap", "none"] as const;
 export const CaptionLook = z.object({
   font: TextFont.default("clean"),
   color: z.string().default("#ffffff"),
@@ -78,6 +82,56 @@ export const EDIT_STYLES = ["professional", "creator"] as const;
 export const EditStyle = z.enum(EDIT_STYLES);
 export type EditStyle = z.infer<typeof EditStyle>;
 
+// Effects the editor may use. Several can be ticked per group; Claude picks the best of
+// the ticked ones for each video (never anything unticked).
+export const EFFECT_GROUPS = {
+  titles: ["card", "poster", "recap", "pro"],
+  captions: ["lines", "karaoke", "pop", "lyrics", "window", "typewriter"],
+  transitions: ["cut", "dissolve", "beat"],
+  moves: ["still", "push", "punch", "pan"],
+  looks: ["natural", "warm", "cinematic", "airy", "mono"],
+  extras: ["story", "cards", "endcard", "sfx"],
+} as const;
+export type EffectGroup = keyof typeof EFFECT_GROUPS;
+export const Effects = z.object({
+  titles: z.array(z.enum(EFFECT_GROUPS.titles)).default(["pro", "card"]),
+  captions: z.array(z.enum(EFFECT_GROUPS.captions)).default(["lines", "lyrics"]),
+  transitions: z.array(z.enum(EFFECT_GROUPS.transitions)).default(["cut", "dissolve"]),
+  moves: z.array(z.enum(EFFECT_GROUPS.moves)).default(["still", "push", "punch"]),
+  looks: z.array(z.enum(EFFECT_GROUPS.looks)).default(["natural", "cinematic"]),
+  extras: z.array(z.enum(EFFECT_GROUPS.extras)).default(["endcard"]),
+});
+export type Effects = z.infer<typeof Effects>;
+
+export const EFFECT_INFO: Record<string, { label: string; desc: string }> = {
+  "titles.card": { label: "Song card", desc: "Small song title + singer card, top left" },
+  "titles.poster": { label: "Poster card", desc: "White card, colour band, big serif title, event + date" },
+  "titles.recap": { label: "Month recap", desc: "Black screen, 'JUNE recap', clip tiles popping in" },
+  "titles.pro": { label: "Elegant title", desc: "Serif title with a thin line, fades in over the shot" },
+  "captions.lines": { label: "Subtitles", desc: "Clean sentence subtitles, low in frame" },
+  "captions.karaoke": { label: "Word highlight", desc: "Subtitles with the spoken word highlighted" },
+  "captions.pop": { label: "Pop-up words", desc: "Big 1-3 word captions, key words in colour" },
+  "captions.lyrics": { label: "Worship lyrics", desc: "One sung line at a time, elegant italic" },
+  "captions.window": { label: "Lyric window", desc: "Retro pop-up window, each line types in" },
+  "captions.typewriter": { label: "Typewriter", desc: "Serif lines typed with a blinking cursor" },
+  "transitions.cut": { label: "Straight cuts", desc: "Clean cuts on natural pauses" },
+  "transitions.dissolve": { label: "Dissolves", desc: "Soft cross-fades between scenes" },
+  "transitions.beat": { label: "Beat cuts", desc: "Cuts land exactly on the music's beat" },
+  "moves.still": { label: "Steady", desc: "Locked-off, calm framing" },
+  "moves.push": { label: "Slow push-in", desc: "Gentle zoom toward the face on key lines" },
+  "moves.punch": { label: "Punch-in", desc: "Tighter reframe on jump cuts" },
+  "moves.pan": { label: "Slow pan", desc: "Drifts across the scene (bands, groups)" },
+  "looks.natural": { label: "Natural", desc: "True-to-life colour, corrected light" },
+  "looks.warm": { label: "Warm film", desc: "Golden, soft, nostalgic" },
+  "looks.cinematic": { label: "Cinematic", desc: "Rich contrast, teal shadows, warm skin" },
+  "looks.airy": { label: "Bright & airy", desc: "Light, soft, clean whites" },
+  "looks.mono": { label: "Black & white", desc: "Timeless monochrome" },
+  "extras.story": { label: "Story lines", desc: "2-5 typed lines that tell the moment" },
+  "extras.cards": { label: "Photo cards", desc: "Your photos float in as cards" },
+  "extras.endcard": { label: "End card", desc: "Your closing card with handle and script" },
+  "extras.sfx": { label: "Sound effects", desc: "Soft whooshes on scene changes" },
+};
+
 export const QUALITIES = ["standard", "high", "ultra"] as const;
 export const Quality = z.enum(QUALITIES);
 export const QUALITY_LABEL: Record<(typeof QUALITIES)[number], string> = {
@@ -107,6 +161,9 @@ export const EditDefaults = z.object({
       hookOptions: z.number().int().min(1).max(3).default(1),
       extraLengths: z.array(z.number().min(6).max(3600)).max(3).default([]),
       alsoCarousel: z.boolean().default(false),
+      titleStyle: z.enum(TITLE_STYLES).default("card"),
+      eventName: z.string().default(""),
+      effects: Effects.prefault({}),
 });
 export type EditDefaults = z.infer<typeof EditDefaults>;
 
@@ -312,62 +369,83 @@ export const BUILTIN_STYLES: StylePreset[] = [
     id: "sermon-clip-reel",
     name: "Sermon clip · Reel",
     description: "The strongest 30-45 s of a message, studio-lit, clean subtitles.",
-    edit: ed({ format: "reel", editType: "sermon", defaultSeconds: 40, relight: true, background: BackgroundChoice.parse({ mode: "none" }) }),
+    edit: ed({ effects: Effects.parse({ titles: ["pro"], captions: ["lines", "karaoke"], transitions: ["cut", "dissolve"], moves: ["still", "push", "punch"], looks: ["natural", "cinematic"], extras: ["endcard"] }), format: "reel", editType: "sermon", defaultSeconds: 40, relight: true, background: BackgroundChoice.parse({ mode: "none" }) }),
     captionChoice: { style: "lines", look: look({ font: "clean", position: "lower", background: "shadow", size: "medium" }) },
   },
   {
     id: "sermon-youtube",
     name: "Full sermon · YouTube",
     description: "Whole message in order, dead air removed, 4K studio finish.",
-    edit: ed({ format: "youtube", editType: "sermon", fullLength: true, youtubeSeconds: 1800, quality: "ultra", relight: true }),
+    edit: ed({ effects: Effects.parse({ titles: ["pro"], captions: ["lines"], transitions: ["cut", "dissolve"], moves: ["still", "push"], looks: ["natural", "cinematic"], extras: ["endcard"] }), format: "youtube", editType: "sermon", fullLength: true, youtubeSeconds: 1800, quality: "ultra", relight: true }),
     captionChoice: { style: "lines", look: look({ font: "clean", position: "lower", background: "box", size: "small" }) },
   },
   {
     id: "sermon-studio-youtube",
     name: "Studio sermon · YouTube",
     description: "Speaker on a real studio photo background, key and rim light, 8-10 min highlight.",
-    edit: ed({ format: "youtube", editType: "sermon", youtubeSeconds: 540, quality: "ultra", relight: true, background: BackgroundChoice.parse({ mode: "stock", stockKind: "photo", depthBlur: true }) }),
+    edit: ed({ effects: Effects.parse({ titles: ["pro"], captions: ["lines"], transitions: ["cut", "dissolve"], moves: ["still", "push", "punch"], looks: ["cinematic", "natural"], extras: ["endcard"] }), format: "youtube", editType: "sermon", youtubeSeconds: 540, quality: "ultra", relight: true, background: BackgroundChoice.parse({ mode: "stock", stockKind: "photo", depthBlur: true }) }),
     captionChoice: { style: "lines", look: look({ font: "clean", position: "lower", background: "shadow", size: "small" }) },
   },
   {
     id: "worship-reel",
     name: "Worship song · Reel",
     description: "Peak of the song, continuous sound, elegant lyric lines, gentle moves.",
-    edit: ed({ format: "reel", editType: "worship", defaultSeconds: 35, relight: false }),
+    edit: ed({ effects: Effects.parse({ titles: ["card", "pro"], captions: ["lyrics", "window"], transitions: ["dissolve", "cut"], moves: ["still", "push", "pan"], looks: ["warm", "natural"], extras: ["endcard"] }), format: "reel", editType: "worship", defaultSeconds: 35, relight: false }),
     captionChoice: { style: "lyrics", look: look({ font: "elegant", position: "lower", background: "shadow" }) },
   },
   {
     id: "worship-youtube",
     name: "Worship song · YouTube",
     description: "Full song, horizontal, lyric lines, no music added on top.",
-    edit: ed({ format: "youtube", editType: "worship", fullLength: true, youtubeSeconds: 420, quality: "ultra", relight: false }),
+    edit: ed({ effects: Effects.parse({ titles: ["card", "pro"], captions: ["lyrics"], transitions: ["dissolve", "cut"], moves: ["still", "push", "pan"], looks: ["warm", "cinematic"], extras: ["endcard"] }), format: "youtube", editType: "worship", fullLength: true, youtubeSeconds: 420, quality: "ultra", relight: false }),
     captionChoice: { style: "lyrics", look: look({ font: "elegant", position: "lower", background: "shadow" }) },
   },
   {
     id: "testimony-reel",
     name: "Testimony · Reel",
     description: "Personal story, best takes, soft background blur, warm studio light.",
-    edit: ed({ format: "reel", editType: "talking", defaultSeconds: 45, relight: true, background: BackgroundChoice.parse({ mode: "blur" }) }),
+    edit: ed({ effects: Effects.parse({ titles: ["pro"], captions: ["karaoke", "lines"], transitions: ["cut"], moves: ["still", "push", "punch"], looks: ["natural", "warm"], extras: ["endcard"] }), format: "reel", editType: "talking", defaultSeconds: 45, relight: true, background: BackgroundChoice.parse({ mode: "blur" }) }),
     captionChoice: { style: "karaoke", look: look({ font: "clean", position: "lower", background: "shadow" }) },
   },
   {
     id: "devotional-studio",
     name: "Devotional talk · studio backdrop",
     description: "Short devotional on a candle-lit worship backdrop with studio lighting.",
-    edit: ed({ format: "reel", editType: "talking", defaultSeconds: 40, relight: true, background: BackgroundChoice.parse({ mode: "studio", preset: "candles-gold" }) }),
+    edit: ed({ effects: Effects.parse({ titles: ["pro"], captions: ["lines", "typewriter"], transitions: ["dissolve"], moves: ["still", "push"], looks: ["warm", "cinematic"], extras: ["endcard"] }), format: "reel", editType: "talking", defaultSeconds: 40, relight: true, background: BackgroundChoice.parse({ mode: "studio", preset: "candles-gold" }) }),
     captionChoice: { style: "lines", look: look({ font: "elegant", position: "lower", background: "shadow" }) },
+  },
+  {
+    id: "worship-circle-song",
+    name: "Worship Circle · live song Reel",
+    description: "Poster title card, retro pop-up lyric window typing each line, long multi-angle live takes, song + band credits.",
+    edit: ed({ effects: Effects.parse({ titles: ["poster"], captions: ["window"], transitions: ["cut", "dissolve"], moves: ["still", "pan", "push"], looks: ["warm", "natural"], extras: ["endcard"] }), format: "reel", editType: "worship", defaultSeconds: 75, relight: false, titleStyle: "poster", eventName: "Worship Circle" }),
+    captionChoice: { style: "window", look: look({ font: "classic", position: "upper", highlight: "#e0559a", color: "#e0559a" }) },
+  },
+  {
+    id: "worship-night-promo",
+    name: "Worship night promo",
+    description: "Beat-synced candid moments, typewritten serif story lines with a cursor, closing quote and event card.",
+    edit: ed({ effects: Effects.parse({ titles: ["pro"], captions: ["typewriter"], transitions: ["beat"], moves: ["push", "pan", "still"], looks: ["warm", "cinematic"], extras: ["story", "endcard"] }), format: "reel", editType: "montage", defaultSeconds: 45, relight: false, titleStyle: "none", eventName: "Worship Circle" }),
+    captionChoice: { style: "typewriter", look: look({ font: "classic", position: "lower", background: "shadow" }) },
+  },
+  {
+    id: "monthly-recap",
+    name: "Monthly recap",
+    description: "Black-screen 'JUNE recap' opener with clip tiles popping in, then fast beat-synced highlights.",
+    edit: ed({ effects: Effects.parse({ titles: ["recap"], captions: ["typewriter"], transitions: ["beat"], moves: ["pan", "push"], looks: ["warm", "cinematic"], extras: ["story"] }), format: "reel", editType: "montage", defaultSeconds: 15, relight: false, titleStyle: "recap", captions: false }),
+    captionChoice: { style: "typewriter", look: look({ font: "classic", position: "lower" }) },
   },
   {
     id: "event-recap",
     name: "Church event recap · Reel",
     description: "Best moments first, varied shots, warm natural colour.",
-    edit: ed({ format: "reel", editType: "montage", defaultSeconds: 30, relight: false, captions: false }),
+    edit: ed({ effects: Effects.parse({ titles: ["pro"], captions: ["typewriter"], transitions: ["beat", "dissolve"], moves: ["pan", "push", "still"], looks: ["warm", "natural"], extras: ["story", "endcard"] }), format: "reel", editType: "montage", defaultSeconds: 30, relight: false, captions: false }),
   },
   {
     id: "creator-energetic",
     name: "Creator energetic · Reel",
     description: "Fast social style: pop-up words, punch-ins, sound effects.",
-    edit: ed({ format: "reel", editType: "talking", editStyle: "creator", defaultSeconds: 30, relight: true }),
+    edit: ed({ effects: Effects.parse({ titles: ["pro"], captions: ["pop"], transitions: ["cut"], moves: ["punch", "push"], looks: ["cinematic", "natural"], extras: ["sfx", "cards", "endcard"] }), format: "reel", editType: "talking", editStyle: "creator", defaultSeconds: 30, relight: true }),
     captionChoice: { style: "pop", look: look({ font: "bold", position: "middle", size: "large" }) },
   },
 ];
@@ -409,6 +487,12 @@ export const EditRequest = z.object({
   lyrics: z.string().max(6000).default(""),
   songTitle: z.string().max(120).default(""),
   singer: z.string().max(120).default(""),
+  // Allowed effects (Claude picks the best of these). Missing = older job: decided from the fields below.
+  effects: Effects.optional(),
+  // Opening title design, the event/ministry name for it, and song/band credits for the caption.
+  titleStyle: z.enum(TITLE_STYLES).default("card"),
+  eventName: z.string().max(80).default(""),
+  credits: z.string().max(600).default(""),
   // Who to keep in frame, e.g. "the woman in beige singing at the podium".
   focus: z.string().max(200).default(""),
   stabilize: z.enum(["auto", "on", "off"]).default("auto"),

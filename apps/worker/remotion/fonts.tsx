@@ -9,6 +9,9 @@ import "@fontsource/montserrat/700.css";
 import "@fontsource/montserrat/800.css";
 import "@fontsource/playfair-display/500.css";
 import "@fontsource/playfair-display/500-italic.css";
+import "@fontsource/playfair-display/800.css";
+import "@fontsource/courier-prime/400.css";
+import "@fontsource/courier-prime/700.css";
 import "@fontsource/caveat/600.css";
 import "@fontsource/noto-serif-telugu/500.css";
 import "@fontsource/noto-serif-telugu/700.css";
@@ -23,6 +26,7 @@ export const FONTS = {
   sans: "Inter, 'Noto Sans Telugu', system-ui, sans-serif",
   bold: "Montserrat, 'Noto Sans Telugu', Inter, sans-serif",
   hand: "Caveat, 'Noto Sans Telugu', cursive",
+  type: "'Courier Prime', 'Noto Sans Telugu', 'Courier New', monospace",
   teluguSerif: "'Noto Serif Telugu', serif",
   teluguSans: "'Noto Sans Telugu', sans-serif",
 };
@@ -36,6 +40,9 @@ const LOAD = [
   "800 40px Montserrat",
   "500 40px 'Playfair Display'",
   "italic 500 40px 'Playfair Display'",
+  "800 40px 'Playfair Display'",
+  "400 40px 'Courier Prime'",
+  "700 40px 'Courier Prime'",
   "600 40px Caveat",
   "500 40px 'Noto Serif Telugu'",
   "700 40px 'Noto Serif Telugu'",

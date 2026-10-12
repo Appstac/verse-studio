@@ -1,5 +1,6 @@
 import React, { useEffect, useRef, useState } from "react";
-import { PRESETS, brandingFromSettings, type Preset, type Settings } from "@shared/schema";
+import { PRESETS, QUALITY_LABEL, allStyles, brandingFromSettings, type Preset, type Settings } from "@shared/schema";
+import { EditOptions } from "./EditOptions";
 import { useApp } from "../App";
 import * as g from "../google";
 import { PRESET_INFO } from "./Make";
@@ -188,6 +189,34 @@ export function SettingsView() {
             <input type="checkbox" checked={s.auto.enabled} onChange={(e) => set((x) => void (x.auto.enabled = e.target.checked))} />
             <span style={{ fontWeight: 600 }}>Make content automatically every day</span>
           </label>
+          <div className="grid2">
+            <div className="field">
+              <span>Shape of auto videos</span>
+              <div className="seg" role="group" aria-label="Auto shape">
+                {(
+                  [
+                    ["reel", "Reels (vertical)"],
+                    ["youtube", "YouTube (horizontal)"],
+                    ["both", "Both"],
+                  ] as const
+                ).map(([v, l]) => (
+                  <button key={v} type="button" aria-pressed={s.auto.format === v} onClick={() => set((x) => void (x.auto.format = v))}>
+                    {l}
+                  </button>
+                ))}
+              </div>
+            </div>
+            <label className="field">
+              <span>Quality of auto videos</span>
+              <select value={s.auto.quality} onChange={(e) => set((x) => void (x.auto.quality = e.target.value as Settings["auto"]["quality"]))}>
+                {(Object.keys(QUALITY_LABEL) as Array<keyof typeof QUALITY_LABEL>).map((q) => (
+                  <option key={q} value={q}>
+                    {QUALITY_LABEL[q]}
+                  </option>
+                ))}
+              </select>
+            </label>
+          </div>
           <div className="grid3">
             <label className="field">
               <span>Reels per day</span>
@@ -382,7 +411,44 @@ export function SettingsView() {
 
         <LearnedSection />
 
+        <Section title="Edit defaults" desc="What Make → Edit starts with when you choose “My defaults”. Every choice can still be changed per video.">
+          <EditOptions value={s.edit} onChange={(v) => set((x) => void (x.edit = v))} />
+        </Section>
+
+        <Section title="Styles" desc="Ready-made and saved bundles of every edit choice. Pick one on Make → Edit; save your own from there.">
+          <label className="field">
+            <span>Style selected when you open Make → Edit</span>
+            <select value={s.defaultStyleId} onChange={(e) => set((x) => void (x.defaultStyleId = e.target.value))}>
+              <option value="defaults">My defaults</option>
+              {allStyles(s).map((st) => (
+                <option key={st.id} value={st.id}>
+                  {st.name}
+                </option>
+              ))}
+            </select>
+          </label>
+          {s.stylePresets.length ? (
+            <div className="files">
+              {s.stylePresets.map((st) => (
+                <div className="filerow" key={st.id}>
+                  <span>{st.name}</span>
+                  <button type="button" className="btn quiet small" onClick={() => set((x) => void (x.stylePresets = x.stylePresets.filter((y) => y.id !== st.id)))}>
+                    Delete
+                  </button>
+                </div>
+              ))}
+            </div>
+          ) : (
+            <p className="hint">No saved styles yet. On Make → Edit, set things up and press “Save these choices as a style”.</p>
+          )}
+        </Section>
+
         <Section title="Advanced">
+          <label className="field">
+            <span>Pixabay key (free stock photos, videos and footage)</span>
+            <input type="text" value={s.advanced.pixabayKey} onChange={(e) => set((x) => void (x.advanced.pixabayKey = e.target.value.trim()))} placeholder="Paste your key from pixabay.com/api/docs" />
+            <small>Free account at pixabay.com, then copy “Your API key” from pixabay.com/api/docs. Used for real photo/video backgrounds and the Stock footage look.</small>
+          </label>
           <div className="grid2">
             <label className="field">
               <span>Speech recognition accuracy</span>

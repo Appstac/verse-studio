@@ -1,9 +1,23 @@
 import React, { useEffect, useRef, useState } from "react";
-import { PRESETS, brandingFromSettings, captionChoiceFromSettings, type EditType, type Language, type Preset, MEDIA_PRESETS } from "@shared/schema";
+import {
+  PRESETS,
+  QUALITY_LABEL,
+  allStyles,
+  brandingFromSettings,
+  captionChoiceFromSettings,
+  type Branding,
+  type CaptionChoice,
+  type EditDefaults,
+  type EditType,
+  type Language,
+  type Preset,
+  type StylePreset,
+  MEDIA_PRESETS,
+} from "@shared/schema";
 import { useApp } from "../App";
 import * as g from "../google";
 import { queueJob } from "../studio";
-import { BrandingEditor, CaptionEditor, useLogoUrl } from "./StyleEditors";
+import { EditOptions } from "./EditOptions";
 
 type Mode = "edit" | "verse" | "carousel";
 
@@ -195,41 +209,62 @@ function Uploader({ uploads, setUploads }: { uploads: Upload[]; setUploads: Reac
 }
 
 const EDIT_TYPE_HINT: Record<EditType, string> = {
-  auto: "Claude looks and listens, then picks the right style.",
-  worship: "Keeps whole sung lines, no jump cuts, gentle moves, lyrics on screen, no extra music over the singing.",
-  talking: "Keeps the best take, cuts pauses and retakes, big pop-up captions, punch-in zooms.",
-  sermon: "Finds the strongest 1-3 points, cuts cleanly between thoughts, clear captions, calm pacing.",
-  montage: "Short varied shots cut to the music, with the best moments first.",
+  auto: "Claude looks and listens, then picks the right approach.",
+  worship: "Keeps whole sung lines and continuous sound, lyrics on screen, no music on top of the singing.",
+  talking: "Keeps the best take, removes pauses and retakes, clean captions.",
+  sermon: "Finds the strongest moment (or keeps the full message on YouTube), clean subtitles, calm pacing.",
+  montage: "The best moments first, varied shots, cut on the music's beat.",
 };
 
+// Pick a saved style (or start from defaults), see every choice, change anything, send.
 function EditForm() {
-  const { studio, toast, go, refresh } = useApp();
+  const { studio, toast, go, refresh, saveSettings } = useApp();
+  const s = studio.settings;
+  const styles = allStyles(s);
+  const [styleId, setStyleId] = useState<string>(styles.some((x) => x.id === s.defaultStyleId) ? s.defaultStyleId : "defaults");
+  const fromStyle = (id: string) => {
+    const st = styles.find((x) => x.id === id);
+    return {
+      opts: structuredClone(st ? st.edit : s.edit),
+      caption: structuredClone(st?.captionChoice ?? captionChoiceFromSettings(s)),
+      branding: structuredClone(st?.branding ?? brandingFromSettings(s)),
+    };
+  };
+  const [opts, setOpts] = useState<EditDefaults>(() => fromStyle(styleId).opts);
+  const [captionChoice, setCaptionChoice] = useState<CaptionChoice>(() => fromStyle(styleId).caption);
+  const [branding, setBranding] = useState<Branding>(() => fromStyle(styleId).branding);
   const [uploads, setUploads] = useState<Upload[]>([]);
   const [prompt, setPrompt] = useState("");
-  const [seconds, setSeconds] = useState(studio.settings.edit.defaultSeconds);
-  const [layout, setLayout] = useState<"auto" | "fill" | "blur-pad">("auto");
-  const [captions, setCaptions] = useState(true);
-  const [capLang, setCapLang] = useState<"auto" | "en" | "te">("auto");
-  const [keepAudio, setKeepAudio] = useState(true);
-  const [alsoCarousel, setAlsoCarousel] = useState(false);
-  const [editType, setEditType] = useState<EditType>("auto");
   const [lyrics, setLyrics] = useState("");
   const [songTitle, setSongTitle] = useState("");
   const [singer, setSinger] = useState("");
+  const [eventName, setEventName] = useState(() => fromStyle(styleId).opts.eventName);
+  const [credits, setCredits] = useState("");
   const [focus, setFocus] = useState("");
-  const [stabilize, setStabilize] = useState<"auto" | "on" | "off">("auto");
-  const [cleanAudio, setCleanAudio] = useState(true);
-  const [autoColor, setAutoColor] = useState(true);
-  const [qualityCheck, setQualityCheck] = useState(false);
-  const [extraLengths, setExtraLengths] = useState<number[]>([]);
-  const [hookOptions, setHookOptions] = useState<1 | 2 | 3>(1);
-  const [branding, setBranding] = useState(() => brandingFromSettings(studio.settings));
-  const [captionChoice, setCaptionChoice] = useState(() => captionChoiceFromSettings(studio.settings));
-  const logoUrl = useLogoUrl(studio.settings.brand.logoFileId);
   const [busy, setBusy] = useState(false);
   const ready = uploads.filter((u) => u.fileId);
-  const song = editType === "worship" || editType === "auto";
   const uploading = uploads.some((u) => !u.fileId && !u.error);
+  const song = opts.editType === "worship" || opts.editType === "auto";
+  const yt = opts.format === "youtube";
+
+  const applyStyle = (id: string) => {
+    setStyleId(id);
+    const f = fromStyle(id);
+    setOpts(f.opts);
+    setCaptionChoice(f.caption);
+    setBranding(f.branding);
+    if (f.opts.eventName) setEventName(f.opts.eventName);
+  };
+
+  const saveAsStyle = async () => {
+    const name = window.prompt("Name this style (e.g. Sunday sermon clip)")?.trim();
+    if (!name) return;
+    const id = `mine-${Date.now().toString(36)}`;
+    const preset: StylePreset = { id, name, description: "Saved from Make → Edit", edit: { ...opts, eventName }, captionChoice, branding };
+    await saveSettings({ ...s, stylePresets: [...s.stylePresets, preset] });
+    setStyleId(id);
+    toast(`Saved "${name}". It's in the style list from now on.`);
+  };
 
   return (
     <form
@@ -243,32 +278,36 @@ function EditForm() {
             inputFileIds: ready.map((u) => u.fileId!),
             inputNames: ready.map((u) => u.name),
             prompt,
-            targetSeconds: seconds,
-            layout,
-            captions,
-            captionLanguage: capLang,
-            keepOriginalAudio: keepAudio,
-            alsoCarousel,
-            format: studio.settings.edit.format,
-            fullLength: studio.settings.edit.fullLength,
-            quality: studio.settings.edit.quality,
-            editStyle: studio.settings.edit.editStyle,
-            relight: studio.settings.edit.relight,
-            background: studio.settings.edit.background,
-            editType,
+            targetSeconds: yt ? opts.youtubeSeconds : opts.defaultSeconds,
+            format: opts.format,
+            fullLength: yt && opts.fullLength,
+            layout: opts.layout,
+            captions: opts.captions,
+            captionLanguage: opts.captionLanguage,
+            keepOriginalAudio: opts.keepOriginalAudio,
+            alsoCarousel: opts.alsoCarousel,
+            editType: opts.editType,
+            editStyle: opts.editStyle,
+            quality: opts.quality,
+            relight: opts.relight,
+            background: opts.background,
+            effects: opts.effects,
+            titleStyle: opts.titleStyle,
+            eventName: eventName.trim(),
+            credits: credits.trim(),
             lyrics: song ? lyrics.trim() : "",
             songTitle: song ? songTitle.trim() : "",
             singer: song ? singer.trim() : "",
             focus: focus.trim(),
-            stabilize,
-            cleanAudio,
-            autoColor,
-            qualityCheck,
+            stabilize: opts.stabilize,
+            cleanAudio: opts.cleanAudio,
+            autoColor: opts.autoColor,
+            qualityCheck: opts.qualityCheck,
             ranges: ready
               .map((u, index) => ({ index, start: u.start ?? 0, end: u.end ?? u.duration ?? 99999 }))
               .filter((r, i) => (ready[i].start !== undefined || ready[i].end !== undefined) && r.end > r.start + 0.5),
-            extraLengths: extraLengths.filter((l) => Math.abs(l - seconds) >= 3),
-            hookOptions,
+            extraLengths: opts.extraLengths.filter((l) => Math.abs(l - (yt ? opts.youtubeSeconds : opts.defaultSeconds)) >= 3),
+            hookOptions: opts.hookOptions,
             branding,
             captionChoice,
           });
@@ -282,163 +321,72 @@ function EditForm() {
         }
       }}
     >
+      <div className="field">
+        <span>Style</span>
+        <div className="style-grid">
+          {[{ id: "defaults", name: "My defaults", description: "Your choices from Settings → Edit defaults" }, ...styles].map((st) => (
+            <button key={st.id} type="button" className={`style-card ${styleId === st.id ? "on" : ""}`} onClick={() => applyStyle(st.id)}>
+              <b>{st.name}</b>
+              <small>{st.description}</small>
+            </button>
+          ))}
+        </div>
+        <small>A style fills in every choice below. Change anything you like before sending.</small>
+      </div>
+
       <Uploader uploads={uploads} setUploads={setUploads} />
       <label className="field">
-        <span>What should the reel be?</span>
+        <span>What should the video be?</span>
         <textarea
           value={prompt}
           onChange={(e) => setPrompt(e.target.value)}
-          placeholder="e.g. A 30 second reel of our Christmas carols. Start with the kids singing Podamu podamu, keep the whole chorus, end on the group shot."
+          placeholder="e.g. A reel of our October worship night. Open on the chorus of Jesus What a Savior, show the band and people singing, end on the group."
         />
-        <small>
-          Claude watches the clips and listens before deciding the cuts. Talking to camera? Film the line as many times as you like: it keeps the best take,
-          cuts the pauses, adds big captions and punch-in zooms. Add photos or screenshots and it floats them in as cards where they fit.
-        </small>
+        <small>{EDIT_TYPE_HINT[opts.editType]}</small>
       </label>
-      <div className="field">
-        <span>What kind of video is it?</span>
-        <Seg
-          value={editType}
-          onChange={setEditType}
-          label="Kind of video"
-          options={[["auto", "Let Claude tell"], ["worship", "Worship song"], ["talking", "Talking / testimony"], ["sermon", "Sermon clip"], ["montage", "Event montage"]]}
-        />
-        <small>{EDIT_TYPE_HINT[editType]}</small>
-      </div>
-      {song ? (
-        <details className="subpanel" open={editType === "worship"}>
-          <summary>Song details (optional, makes song reels much better)</summary>
+
+      {song || opts.effects.titles.includes("poster") || opts.effects.titles.includes("recap") || opts.effects.extras.includes("story") ? (
+        <details className="subpanel" open={opts.editType === "worship"}>
+          <summary>Song and event details (makes worship videos much better)</summary>
           <div className="grid2">
             <label className="field">
               <span>Song title</span>
-              <input type="text" value={songTitle} onChange={(e) => setSongTitle(e.target.value)} placeholder="e.g. Yesu Raja" />
+              <input type="text" value={songTitle} onChange={(e) => setSongTitle(e.target.value)} placeholder="e.g. Jesus What a Savior" />
             </label>
             <label className="field">
-              <span>Sung by</span>
-              <input type="text" value={singer} onChange={(e) => setSinger(e.target.value)} placeholder="e.g. Sis. Mary, Grace Church choir" />
+              <span>Sung by / original artist</span>
+              <input type="text" value={singer} onChange={(e) => setSinger(e.target.value)} placeholder="e.g. Housefires" />
             </label>
           </div>
           <label className="field">
+            <span>Event or ministry name</span>
+            <input type="text" value={eventName} onChange={(e) => setEventName(e.target.value)} placeholder="e.g. Worship Circle" />
+            <small>Shown on poster title cards and in closing quotes.</small>
+          </label>
+          <label className="field">
             <span>Lyrics</span>
-            <textarea
-              value={lyrics}
-              onChange={(e) => setLyrics(e.target.value)}
-              placeholder={"Paste the lyrics, one line per line, in Telugu or English.\nThey're shown line by line in time with the singing, instead of guessing words from the audio."}
-              style={{ minHeight: 140 }}
-            />
+            <textarea value={lyrics} onChange={(e) => setLyrics(e.target.value)} placeholder="Paste the lyrics, one line per line (Telugu or English). They appear in time with the singing." style={{ minHeight: 120 }} />
+          </label>
+          <label className="field">
+            <span>Credits for the caption</span>
+            <textarea value={credits} onChange={(e) => setCredits(e.target.value)} placeholder={"Lead vox: Jessy\nDrums: Jeevan\nKeys: Enoch"} style={{ minHeight: 70 }} />
           </label>
         </details>
       ) : null}
+
       <label className="field">
         <span>Who should stay in frame? (optional)</span>
-        <input type="text" value={focus} onChange={(e) => setFocus(e.target.value)} placeholder="e.g. the woman in beige singing at the podium" />
-        <small>The edit crops and slowly moves toward this person, and away from heads and phones in front of the camera.</small>
+        <input type="text" value={focus} onChange={(e) => setFocus(e.target.value)} placeholder="e.g. the pastor in the blue shirt" />
       </label>
-      <label className="field">
-        <span>Length: about {seconds} seconds</span>
-        <input type="range" min={8} max={90} step={1} value={seconds} onChange={(e) => setSeconds(Number(e.target.value))} />
-      </label>
-      <div className="grid2">
-        <div className="field">
-          <span>Framing</span>
-          <Seg value={layout} onChange={setLayout} label="Framing" options={[["auto", "Auto"], ["fill", "Fill the screen"], ["blur-pad", "Keep whole frame"]]} />
-        </div>
-        <div className="field">
-          <span>Captions</span>
-          <div className="row">
-            <Seg value={captions ? capLang : ("off" as const)} label="Captions" onChange={(v) => (v === "off" ? setCaptions(false) : (setCaptions(true), setCapLang(v)))} options={[["auto", "Auto"], ["en", "English"], ["te", "Telugu"], ["off", "Off"]]} />
-          </div>
-        </div>
-      </div>
-      <label className="check">
-        <input type="checkbox" checked={keepAudio} onChange={(e) => setKeepAudio(e.target.checked)} />
-        <span>
-          Keep the original sound (singing, speech)
-          <br />
-          <small className="hint">Music versions are mixed quietly underneath speech. For songs, no music is added on top of the singing.</small>
-        </span>
-      </label>
-      <details className="subpanel">
-        <summary>More versions from the same upload{extraLengths.length || hookOptions > 1 ? ` · ${1 + extraLengths.length + hookOptions - 1} videos` : ""}</summary>
-        <div className="field">
-          <span>Also make these lengths</span>
-          <div className="chips">
-            {[15, 30, 45, 60].filter((l) => Math.abs(l - seconds) >= 3).map((l) => (
-              <button
-                key={l}
-                type="button"
-                className={`chip ${extraLengths.includes(l) ? "on" : ""}`}
-                aria-pressed={extraLengths.includes(l)}
-                onClick={() => setExtraLengths((x) => (x.includes(l) ? x.filter((y) => y !== l) : [...x, l].slice(-3)))}
-              >
-                {l}s
-              </button>
-            ))}
-          </div>
-          <small>Each length is planned separately, so the short one isn't just the long one cut off.</small>
-        </div>
-        <div className="field">
-          <span>Opening hook options</span>
-          <Seg value={String(hookOptions) as "1" | "2" | "3"} onChange={(v) => setHookOptions(Number(v) as 1 | 2 | 3)} label="Hook options" options={[["1", "One"], ["2", "Two"], ["3", "Three"]]} />
-          <small>Get the main reel with 2 or 3 different opening lines, to test which one people stop for.</small>
-        </div>
-      </details>
-      <details className="subpanel">
-        <summary>Watermark and end card for this video</summary>
-        <BrandingEditor value={branding} onChange={setBranding} handle={studio.settings.brand.handle} logo={logoUrl} />
-        <button type="button" className="btn quiet small" onClick={() => setBranding(brandingFromSettings(studio.settings))}>
-          Reset to my defaults
-        </button>
-      </details>
-      <details className="subpanel">
-        <summary>Text style for this video</summary>
-        <CaptionEditor value={captionChoice} onChange={setCaptionChoice} accent={studio.settings.brand.accentColor} />
-        <button type="button" className="btn quiet small" onClick={() => setCaptionChoice(captionChoiceFromSettings(studio.settings))}>
-          Reset to my defaults
-        </button>
-      </details>
-      <details className="subpanel">
-        <summary>Picture and sound fixes</summary>
-        <label className="check">
-          <input type="checkbox" checked={autoColor} onChange={(e) => setAutoColor(e.target.checked)} />
-          <span>
-            Fix light and colour
-            <br />
-            <small className="hint">Brightens dark rooms, tames blown-out walls, warms up cold skin tones.</small>
-          </span>
-        </label>
-        <div className="field">
-          <span>Steady shaky video</span>
-          <Seg value={stabilize} onChange={setStabilize} label="Stabilize" options={[["auto", "When needed"], ["on", "Always"], ["off", "Never"]]} />
-        </div>
-        <label className="check">
-          <input type="checkbox" checked={cleanAudio} onChange={(e) => setCleanAudio(e.target.checked)} />
-          <span>
-            Clean up the sound
-            <br />
-            <small className="hint">Removes hum and hiss, makes voices clearer, evens out loud and quiet parts.</small>
-          </span>
-        </label>
-        <label className="check">
-          <input type="checkbox" checked={qualityCheck} onChange={(e) => setQualityCheck(e.target.checked)} />
-          <span>
-            Double-check the finished reel
-            <br />
-            <small className="hint">Claude watches the result and fixes problems once before you get it. Adds 2-4 minutes.</small>
-          </span>
-        </label>
-      </details>
-      <label className="check">
-        <input type="checkbox" checked={alsoCarousel} onChange={(e) => setAlsoCarousel(e.target.checked)} />
-        <span>
-          Also make a matching carousel from this video
-          <br />
-          <small className="hint">Same message, second format: the key points as swipeable slides.</small>
-        </span>
-      </label>
-      <div className="row">
+
+      <EditOptions value={opts} onChange={setOpts} branding={branding} setBranding={setBranding} captionChoice={captionChoice} setCaptionChoice={setCaptionChoice} />
+
+      <div className="row" style={{ flexWrap: "wrap" }}>
         <button className="btn primary" disabled={busy || uploading || ready.length === 0}>
-          {uploading ? "Waiting for uploads…" : busy ? "Queuing…" : "Make my reel"}
+          {uploading ? "Waiting for uploads…" : busy ? "Queuing…" : yt ? "Make my YouTube video" : "Make my reel"}
+        </button>
+        <button type="button" className="btn quiet" onClick={saveAsStyle}>
+          Save these choices as a style
         </button>
         {ready.length === 0 ? <span className="hint">Add at least one video or photo first.</span> : null}
       </div>
@@ -455,6 +403,8 @@ function VerseForm() {
   const [preset, setPreset] = useState<Preset | "auto">("auto");
   const [refs, setRefs] = useState("");
   const [instructions, setInstructions] = useState("");
+  const [shape, setShape] = useState<"reel" | "youtube" | "both">(s.auto.format);
+  const [quality, setQuality] = useState(s.auto.quality);
   const [busy, setBusy] = useState(false);
   return (
     <form
@@ -466,9 +416,9 @@ function VerseForm() {
           const references = refs.split(/\n|;/).map((r) => r.trim()).filter(Boolean).slice(0, 20);
           await queueJob(studio.folders, {
             type: "verse",
-            format: "reel",
-            bothFormats: false,
-            quality: "high",
+            format: shape === "youtube" ? "youtube" : "reel",
+            bothFormats: shape === "both",
+            quality,
             count: references.length || count,
             theme,
             language,
@@ -486,6 +436,22 @@ function VerseForm() {
         }
       }}
     >
+      <div className="grid2">
+        <div className="field">
+          <span>Shape</span>
+          <Seg value={shape} onChange={setShape} label="Shape" options={[["reel", "Reel 9:16"], ["youtube", "YouTube 16:9"], ["both", "Both"]]} />
+        </div>
+        <label className="field">
+          <span>Quality</span>
+          <select value={quality} onChange={(e) => setQuality(e.target.value as typeof quality)}>
+            {(Object.keys(QUALITY_LABEL) as Array<keyof typeof QUALITY_LABEL>).map((q) => (
+              <option key={q} value={q}>
+                {QUALITY_LABEL[q]}
+              </option>
+            ))}
+          </select>
+        </label>
+      </div>
       <div className="grid2">
         <label className="field">
           <span>How many reels</span>

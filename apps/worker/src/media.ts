@@ -224,6 +224,9 @@ export interface AudioMap {
   /** Stretches of sound separated by short dips: sung lines or spoken phrases. */
   phrases: Array<{ start: number; end: number }>;
   silences: Array<{ start: number; end: number }>;
+  /** Musical pulse, if there is a steady one. */
+  bpm?: number;
+  beats?: number[];
 }
 
 // Reads a 16 kHz mono 16-bit WAV (from extractWav) and maps how loud it is over time.
@@ -291,7 +294,66 @@ export function audioMap(wavFile: string): AudioMap {
     prev = p.end;
   }
   if (seconds - prev >= 1) silences.push({ start: prev, end: seconds });
-  return { db, bucketSeconds, phrases: real.slice(0, 200), silences: silences.slice(0, 100) };
+  const beat = detectBeats(buf, dataStart, n, rate);
+  return { db, bucketSeconds, phrases: real.slice(0, 200), silences: silences.slice(0, 100), ...beat };
+}
+
+// Tempo and beat times from an onset envelope (energy rises), by autocorrelation.
+function detectBeats(buf: Buffer, dataStart: number, n: number, rate: number): { bpm?: number; beats?: number[] } {
+  const hop = Math.round(rate * 0.02); // 20 ms
+  const env: number[] = [];
+  let prev = 0;
+  for (let i = 0; i + hop <= n; i += hop) {
+    let acc = 0;
+    for (let j = 0; j < hop; j++) {
+      const v = buf.readInt16LE(dataStart + (i + j) * 2) / 32768;
+      acc += v * v;
+    }
+    const e = Math.log10(acc / hop + 1e-9);
+    env.push(Math.max(0, e - prev));
+    prev = e;
+  }
+  if (env.length < 300) return {};
+  const mean = env.reduce((a, b) => a + b, 0) / env.length;
+  const o = env.map((x) => x - mean);
+  let best = 0;
+  let bestLag = 0;
+  for (let lag = Math.round(60 / 170 / 0.02); lag <= Math.round(60 / 60 / 0.02); lag++) {
+    let c = 0;
+    for (let i = 0; i + lag < o.length; i++) c += o[i] * o[i + lag];
+    c /= o.length - lag;
+    if (c > best) {
+      best = c;
+      bestLag = lag;
+    }
+  }
+  const varO = o.reduce((a, b) => a + b * b, 0) / o.length;
+  if (!bestLag || best / (varO || 1) < 0.08) return {}; // no steady pulse (speech)
+  // Fractional period: try lags around the best one in 0.05-frame steps.
+  const score = (lag: number, ph: number) => {
+    let sc = 0;
+    for (let t = ph; t < env.length - 1; t += lag) {
+      const i = Math.floor(t);
+      sc += env[i] + env[i + 1] * 0.5;
+    }
+    return sc;
+  };
+  let lagF = bestLag;
+  let phase = 0;
+  let top = -Infinity;
+  for (let lag = bestLag - 1; lag <= bestLag + 1; lag += 0.05) {
+    for (let ph = 0; ph < lag; ph += 0.5) {
+      const sc = score(lag, ph);
+      if (sc > top) {
+        top = sc;
+        lagF = lag;
+        phase = ph;
+      }
+    }
+  }
+  const beats: number[] = [];
+  for (let t = phase; t < env.length; t += lagF) beats.push(+(t * 0.02).toFixed(2));
+  return { bpm: Math.round(60 / (lagF * 0.02)), beats: beats.slice(0, 160) };
 }
 
 export function describeAudioMap(m: AudioMap): string {
@@ -304,6 +366,7 @@ export function describeAudioMap(m: AudioMap): string {
     `Loudness, one bar per ${m.bucketSeconds}s from 0s (quiet ▁ to loud █, ${min} to ${max} dBFS): ${graph}`,
     `Sound phrases (sung lines / spoken sentences, seconds): ${m.phrases.map((p) => `${f(p.start)}-${f(p.end)}`).join(", ") || "none"}`,
     `Near-silent gaps of 1s or more: ${m.silences.map((p) => `${f(p.start)}-${f(p.end)}`).join(", ") || "none"}`,
+    m.bpm && m.beats ? `Steady beat: about ${m.bpm} BPM. Beat times (s), for cutting on the beat: ${m.beats.join(", ")}` : "No steady musical beat.",
   ].join("\n  ");
 }
 

@@ -130,14 +130,16 @@ export type ClipEditProps = {
   transition: "cut" | "fade";
   captions: {
     words: CaptionWord[];
-    style: "pop" | "karaoke" | "lines" | "lyrics" | "none";
+    style: "pop" | "karaoke" | "lines" | "lyrics" | "window" | "typewriter" | "none";
     language: Lang;
     emphasis?: string[];
     look?: CaptionLookProps;
   };
   // Song lyrics, one line at a time, on the output timeline.
   lyrics?: Array<{ text: string; startMs: number; endMs: number }>;
-  titleCard?: { title: string; subtitle?: string };
+  titleCard?: { title: string; subtitle?: string; style?: "card" | "poster" | "recap"; header?: string; date?: string };
+  // Short story lines typed on screen (promos/recaps), on the output timeline.
+  story?: Array<{ text: string; startMs: number; endMs: number }>;
   grades?: Grade[];
   // One continuous sound source under all the pictures (songs): pictures can cut freely.
   audioBed?: { src: string; start: number; fadeOutFrames: number };

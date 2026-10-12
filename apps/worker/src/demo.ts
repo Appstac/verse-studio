@@ -106,6 +106,10 @@ export const mock: Planner = {
         { text: "మీరే యోగ్యులు ప్రభువా", start: 5.4, end: 7.6 },
       ],
       cta: "Type AMEN if you were blessed",
+      titleStyle: "poster",
+      captionStyle: "window",
+      look: "warm",
+      storyLines: [{ text: "And tonight… we're just grateful.", at: 4, duration: 3 }],
       captionLanguage: "english",
       showCaptions: true,
       mood: "worship",
@@ -179,6 +183,9 @@ async function main() {
         ...(process.env.DEMO_BG
           ? { inputFileIds: ["Uploads/talk.mp4"], inputNames: ["talk.mp4"], editType: "talking", background: { mode: "studio", preset: process.env.DEMO_BG } }
           : {}),
+        effects: { titles: ["poster", "pro"], captions: ["window", "lyrics"], transitions: ["cut", "dissolve"], moves: ["still", "push", "pan", "punch"], looks: ["warm", "natural"], extras: ["story", "endcard"] },
+        eventName: "Worship Circle",
+        credits: "Lead vox: Jessy\nKeys: Enoch",
         captionChoice: { style: "lyrics", look: { font: "elegant", color: "#ffffff", highlight: "", size: "medium", position: "lower", background: "shadow", uppercase: false } },
       }),
     },

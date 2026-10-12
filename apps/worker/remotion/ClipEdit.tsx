@@ -5,6 +5,7 @@ import React, { useMemo } from "react";
 import { AbsoluteFill, Audio, Easing, Img, interpolate, OffthreadVideo, Sequence, spring, useCurrentFrame, useVideoConfig } from "remotion";
 import { Background } from "./components/Background";
 import { Outro, Signature, fontFor } from "./components/Brand";
+import { LyricWindow, PosterCard, RecapOpener, TypedLines, type TimedLine } from "./components/WorshipStyles";
 import { FONTS, FontGate } from "./fonts";
 import { presetStyle } from "./presets";
 import { FPS, TRANSITION_FRAMES, type CaptionLookProps, type ClipEditProps, type ClipSegment, type Grade, type Overlay } from "./types";
@@ -477,7 +478,16 @@ export const ClipEdit: React.FC<ClipEditProps> = (props) => {
   // Professional: never the bouncy pop-up words; clean subtitle lines instead.
   const captionStyle = pro && props.captions.style === "pop" ? "lines" : props.captions.style;
   const hasLyrics = (props.lyrics?.length ?? 0) > 0;
-  const titleFrom = props.hook ? 90 : 12;
+  const titleStyle = props.titleCard?.style ?? "card";
+  const bigTitle = !!props.titleCard?.title && (titleStyle === "poster" || titleStyle === "recap");
+  const titleFrom = props.hook && !bigTitle ? 90 : 12;
+  // Sung/spoken lines for the window and typewriter styles: pasted lyrics, or speech grouped into phrases.
+  const phraseLines: TimedLine[] = useMemo(() => {
+    if (hasLyrics) return props.lyrics!;
+    const caps: Caption[] = props.captions.words.map((w, i) => ({ text: (i === 0 ? "" : " ") + w.text.trim(), startMs: w.startMs, endMs: w.endMs, timestampMs: (w.startMs + w.endMs) / 2, confidence: null }));
+    return createTikTokStyleCaptions({ captions: caps, combineTokensWithinMilliseconds: 1600 }).pages.map((p) => ({ text: p.text.trim(), startMs: p.startMs, endMs: p.startMs + p.durationMs }));
+  }, [hasLyrics, props.lyrics, props.captions.words]);
+  const windowColor = look.highlight || "#e0559a";
   return (
     <FontGate>
       <AbsoluteFill style={{ background: "#000" }}>
@@ -509,7 +519,11 @@ export const ClipEdit: React.FC<ClipEditProps> = (props) => {
               }
             />
           ) : null}
-          {hasLyrics ? (
+          {captionStyle === "window" && phraseLines.length ? (
+            <LyricWindow lines={phraseLines} color={windowColor} land={LAND} />
+          ) : captionStyle === "typewriter" && phraseLines.length ? (
+            <TypedLines lines={phraseLines} land={LAND} position={look.position} color={look.color || "#fff"} />
+          ) : hasLyrics ? (
             <Lyrics lines={props.lyrics!} look={look} accent={props.brand.accent} />
           ) : captionStyle === "none" || props.captions.words.length === 0 ? null : captionStyle === "pop" ? (
             <PopCaptions props={props} accent={props.brand.accent} look={look} />
@@ -533,12 +547,34 @@ export const ClipEdit: React.FC<ClipEditProps> = (props) => {
                 </Sequence>
               ))
             : null}
-          {props.titleCard?.title && body > titleFrom + 60 ? (
+          {props.story?.length ? (
+            // Story lines keep clear of whatever words are already on screen.
+            <TypedLines
+              lines={props.story}
+              land={LAND}
+              position={hasLyrics || props.captions.words.length ? (captionStyle === "window" || look.position === "upper" ? "lower" : "upper") : "lower"}
+            />
+          ) : null}
+          {props.titleCard?.title && titleStyle === "poster" ? (
+            <Sequence from={0} durationInFrames={Math.min(110, body)}>
+              <PosterCard title={props.titleCard.title} header={props.titleCard.header} date={props.titleCard.date} color={windowColor} frames={Math.min(110, body)} land={LAND} />
+            </Sequence>
+          ) : props.titleCard?.title && titleStyle === "recap" ? (
+            <Sequence from={0} durationInFrames={Math.min(80, body)}>
+              <RecapOpener
+                word={props.titleCard.title}
+                script={props.titleCard.subtitle || "recap"}
+                tiles={segs.slice(0, 4).map((sg) => ({ src: sg.src, trimBefore: Math.round(sg.start * FPS) }))}
+                frames={Math.min(80, body)}
+                land={LAND}
+              />
+            </Sequence>
+          ) : props.titleCard?.title && body > titleFrom + 60 ? (
             <Sequence from={titleFrom} durationInFrames={Math.min(135, body - titleFrom)}>
               <TitleCard title={props.titleCard.title} subtitle={props.titleCard.subtitle} accent={props.brand.accent} frames={Math.min(135, body - titleFrom)} />
             </Sequence>
           ) : null}
-          {props.hook ? pro ? <ProTitle text={props.hook} accent={props.brand.accent} /> : <Hook text={props.hook} look={look} /> : null}
+          {props.hook && !bigTitle ? pro ? <ProTitle text={props.hook} accent={props.brand.accent} /> : <Hook text={props.hook} look={look} /> : null}
           <Signature brand={props.brand} color="#ffffff" />
         </Sequence>
         {outroFrames > 0 ? (

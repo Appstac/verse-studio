@@ -111,6 +111,15 @@ Switches, from anywhere (**Settings → Studio computer**, they apply within abo
 
 On the PC, **Stop** turns it off until you press **Start** or restart the PC. **Autostart on-off** is the same switch as on the website.
 
+## Studio features (green screen, lighting, styles)
+
+- **Pixabay key** (free): sign up at pixabay.com, copy "Your API key" from pixabay.com/api/docs, paste it in **Settings → Advanced**. Turns on real photo/video backgrounds and the Stock footage look.
+- **Background removal** runs on the studio computer (no green screen needed). The model (15 MB) downloads by itself the first time.
+- **Styles**: Make → Edit starts from a style (Sermon clip, Full sermon · YouTube, Worship song, Worship Circle live song, Worship night promo, Monthly recap, Testimony, Devotional, Event recap, Creator). Change anything, then "Save these choices as a style". Defaults live in **Settings → Edit defaults**.
+- **Effects gallery**: every title, caption, transition, camera move, colour look and extra has a moving sample. Tick several; Claude picks the best of the ticked ones per video.
+- **Shapes**: Reel (9:16) or YouTube (16:9) for edits and verse videos; auto mode can make either or both. Ultra HD (4K) for YouTube.
+- After this update, press **Settings → Studio computer → Update to latest version** once (installs the background-removal engine and new fonts).
+
 ## 5. First run
 
 1. **Library**: add a few real tracks per mood (Pixabay Music and the YouTube Audio Library allow use on Instagram). Add her own recordings under **My music**, and some vertical clips or photos under **Backgrounds**.

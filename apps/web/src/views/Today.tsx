@@ -54,8 +54,8 @@ function ReelCard({ o, auto, job }: { o: OutputItem; auto: boolean; job: Job }) 
   const video = useObjectUrl(playing ? current?.fileId : undefined);
 
   return (
-    <article className="reel">
-      <div className="phone">
+    <article className={`reel ${o.format === "youtube" ? "wide" : ""}`}>
+      <div className={`phone ${o.format === "youtube" ? "wide" : ""}`}>
         {playing && video ? (
           <video key={video} src={video} controls autoPlay playsInline poster={cover} />
         ) : (

@@ -1,6 +1,6 @@
 // What Claude is asked to produce, and the prompts that ask for it.
 import { z } from "zod";
-import { MOODS, PRESETS, type Settings } from "../../../shared/schema";
+import { EFFECT_INFO, MOODS, PRESETS, type Effects, type Settings } from "../../../shared/schema";
 
 export const VerseItem = z.object({
   reference: z.string().describe('Bible reference in English book names, e.g. "Isaiah 41:10" or "Psalm 46:1-2"'),
@@ -79,6 +79,14 @@ export const EditPlan = z.object({
     .array(z.object({ text: z.string(), start: z.number(), end: z.number() }))
     .describe(
       "Only when lyrics were provided: each lyric line that is sung inside the edit, with start/end in seconds of the SOUND source (the audioBed clip, or the clip of the segment being heard). Empty otherwise.",
+    ),
+  titleStyle: z.enum(["card", "poster", "recap", "pro", "none"]).describe("Opening title design, chosen from the allowed effects"),
+  captionStyle: z.enum(["lines", "karaoke", "pop", "lyrics", "window", "typewriter", "none"]).describe("On-screen caption/lyric style, chosen from the allowed effects"),
+  look: z.enum(["natural", "warm", "cinematic", "airy", "mono"]).describe("Overall colour look, chosen from the allowed effects"),
+  storyLines: z
+    .array(z.object({ text: z.string(), at: z.number().describe("output seconds"), duration: z.number().describe("seconds, 2-4") }))
+    .describe(
+      "Promo/recap story text typed on screen in a serif typewriter style (e.g. 'He was faithful.' / 'And tonight… we're just grateful.' / '\"A gathering beyond the ordinary.\" — Worship Circle'). 2-5 short lines, never over speech captions. Empty unless the request or caption style calls for it.",
     ),
   cta: z.string().describe("Closing call-to-action line for the end card, max 6 words, or empty"),
   notes: z.string().describe("One or two sentences explaining the edit choices"),
@@ -210,7 +218,8 @@ const RECIPES: Record<string, string> = {
   * Remove long pauses and false starts but keep the preacher's rhythm (fewer, longer segments than talking-head). Mild "in" pushes on key sentences, focus on the speaker, crop 1.1-1.4 to lose the pulpit clutter.
   * Captions on; emphasis on scripture names and key words.`,
   montage: `EVENT MONTAGE recipe (style "montage"):
-  * Best, most joyful/emotional moments first (faces, hugs, kids, raised hands, the group). 1.5-4 s shots with variety (wide, close, detail), never two similar shots in a row.
+  * Best, most joyful/emotional moments first (faces, hugs, kids, raised hands, the group). Shots of 1-2 beats (or 1.5-4 s without a beat) with variety (wide, close, detail), never two similar shots in a row.
+  * CUT ON THE BEAT: when the sound has a steady beat, every segment boundary lands on a listed beat time (of the sound source), so the edit pulses with the music. Use the audioBed for the music track.
   * If one clip has a song or strong sound, use it as audioBed and cut pictures on its phrase ends/beats; otherwise sound comes from the shots or the music versions.
   * Use "pan", "in" and "out" for life; focus on people, crop away clutter. End on the group / the most memorable shot.
   * Hook: name the occasion and feeling ("Christmas at Grace Church 🎄"). Captions only if someone speaks something meaningful.`,
@@ -235,6 +244,11 @@ export function editPrompt(opts: {
   format?: "reel" | "youtube";
   fullLength?: boolean;
   editStyle?: "professional" | "creator";
+  captionStyle?: string;
+  titleStyle?: string;
+  effects?: Effects;
+  eventName?: string;
+  credits?: string;
 }) {
   const { s } = opts;
   const clipText = opts.clips
@@ -276,6 +290,13 @@ ${type ? `Kind of video (chosen by the owner): ${type}.` : "Decide which kind of
 ${opts.focus ? `Keep this person/subject in frame: ${opts.focus}.` : ""}
 ${opts.background && opts.background !== "none" ? `The room behind the person will be replaced with a ${opts.background === "blur" ? "blurred version of itself" : "professional studio/worship backdrop"} (virtual green screen). The frame grids still show the original room. Frame the person like a studio shot: centred, head and shoulders to mid-body (crop 1.1-1.4), steady; colour grades should keep skin natural and avoid changing the backdrop much.` : ""}
 ${opts.songTitle || opts.singer ? `Song: "${opts.songTitle || "untitled"}"${opts.singer ? ` sung by ${opts.singer}` : ""} (a title card is added automatically).` : ""}
+${opts.effects ? effectsText(opts.effects) : ""}
+${opts.captionStyle === "window" ? "On-screen lyric style: each sung line types into a small retro pop-up window in the upper third. Keep lyricLines accurate and phrase-length (one sung line each)." : ""}
+${opts.captionStyle === "typewriter" ? "On-screen text style: serif lines typed with a cursor. For promos/recaps with no speech, write 2-5 storyLines that tell a tiny story (a memory, a feeling, an invitation) and end on a short quote signed by the event name." : ""}
+${opts.titleStyle === "poster" ? `Opening: a poster title card (song title on a coloured band${opts.eventName ? `, header "${opts.eventName}"` : ""}, month and year) shows for the first ~3.5 s, so open on a wide establishing shot, not a close-up.` : ""}
+${opts.titleStyle === "recap" ? "Opening: a 'MONTH recap' title over clip tiles for ~2.5 s, then fast, beat-synced highlights of the night." : ""}
+${opts.eventName ? `Event/ministry name: ${opts.eventName}.` : ""}
+${opts.credits ? `Credits to put in the Instagram caption, exactly as written (after a first line with the song title and event):\n${opts.credits}` : ""}
 ${opts.lyrics ? `Lyrics provided by the owner (use these exact lines for lyricLines, in this order; match them to the transcript and the sound phrases to time them):\n"""\n${opts.lyrics.slice(0, 4000)}\n"""` : ""}
 
 ${recipes}
@@ -438,4 +459,16 @@ Open them with the Read tool and check like a demanding editor:
 - Do text, captions or lyrics overlap faces or each other, or sit too low (bottom 20% is covered by Instagram)?
 - Does it end on a complete line/thought?
 If everything is good, return verdict "good" with the same plan. Otherwise return verdict "fix", list the problems, and return a corrected plan (change only what fixes the problems).`;
+}
+
+// The owner ticks the effects she's happy with; Claude picks the best of those for each video.
+function effectsText(e: Effects) {
+  const g = (k: keyof Effects) => e[k].map((v) => `${v} (${EFFECT_INFO[`${k}.${v}`]?.desc ?? v})`).join("; ") || "none";
+  return `ALLOWED EFFECTS: use only these. Pick the one(s) that best fit THIS footage and message; you don't have to use every one.
+- titleStyle from: ${g("titles")}${e.titles.length ? "" : " (use none)"}. "pro" = the elegant hook title.
+- captionStyle from: ${g("captions")}${e.captions.length ? "" : " (use none)"}.
+- transitions from: ${g("transitions")} ("fade" = dissolve; "beat" = cut exactly on beat times).
+- camera moves (segment zoom) from: ${g("moves")} (still = "none", push = "in", punch = "punch", pan = "pan").
+- look from: ${g("looks")}.
+- extras allowed: ${g("extras")} (story = storyLines, cards = overlays; anything not listed must stay empty).`;
 }

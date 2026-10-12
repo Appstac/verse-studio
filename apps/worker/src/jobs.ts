@@ -2,6 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import type { z } from "zod";
 import {
+  type Effects,
   type Branding,
   type CaptionChoice,
   type Job,
@@ -923,6 +924,11 @@ function editPromptFor(ctx: Ctx, req: EditSpec["request"], clips: PreparedClip[]
     format: req.format ?? "reel",
     fullLength: !!req.fullLength,
     editStyle: req.editStyle ?? "professional",
+    captionStyle: (req.captionChoice ?? { style: ctx.settings.captions.onVideoStyle }).style,
+    effects: req.effects,
+    titleStyle: req.titleStyle ?? "card",
+    eventName: req.eventName ?? "",
+    credits: req.credits ?? "",
   });
 }
 
@@ -957,7 +963,7 @@ export async function runEditJob(ctx: Ctx) {
     const plans: Array<{ plan: EditPlan; seconds: number }> = [];
     for (let k = 0; k < lengths.length; k++) {
       if (k > 0) await ctx.update({ stage: `Claude is planning the ${lengths[k]}s version`, progress: 0.25 + 0.05 * k });
-      plans.push({ plan: await ctx.ai.plan("edit", editPromptFor(ctx, req, clips, lengths[k]), EditPlan, planOpts), seconds: lengths[k] });
+      plans.push({ plan: enforceEffects(await ctx.ai.plan("edit", editPromptFor(ctx, req, clips, lengths[k]), EditPlan, planOpts), req.effects), seconds: lengths[k] });
     }
     await materializeClips(ctx, clips, plans.map((p) => p.plan), req);
     log(`[${ctx.job.id}] analysis + planning + prep took ${Math.round((Date.now() - t0) / 1000)}s`);
@@ -967,7 +973,9 @@ export async function runEditJob(ctx: Ctx) {
     // Versions: each length, plus extra hook options on the main length.
     const jobsToRender: Array<{ plan: EditPlan; label: string; qa: boolean }> = [];
     plans.forEach((p, k) => jobsToRender.push({ plan: p.plan, label: lengths.length > 1 ? `${p.seconds}s` : "", qa: k === 0 && !!req.qualityCheck }));
-    const alt = (plans[0].plan.altHooks ?? []).filter((h) => h.trim()).slice(0, Math.max(0, (req.hookOptions ?? 1) - 1));
+    // Extra hook versions only make sense when the hook is actually shown.
+    const hookShown = !req.effects || plans[0].plan.titleStyle === "pro";
+    const alt = hookShown ? (plans[0].plan.altHooks ?? []).filter((h) => h.trim()).slice(0, Math.max(0, (req.hookOptions ?? 1) - 1)) : [];
     alt.forEach((h, k) => jobsToRender.push({ plan: { ...plans[0].plan, hook: h.trim() }, label: `hook ${k + 2}`, qa: false }));
     for (let k = 0; k < jobsToRender.length; k++) {
       const j = jobsToRender[k];
@@ -978,7 +986,8 @@ export async function runEditJob(ctx: Ctx) {
         clips: clipRefs(clips),
         showCaptions: req.captions && j.plan.showCaptions,
         branding: req.branding,
-        captionChoice: req.captionChoice,
+        // The request's text look still applies; spec.captionChoice is only set by later revisions.
+        captionChoice: req.effects ? undefined : req.captionChoice,
       };
       const span = 0.5 / jobsToRender.length;
       outputs.push(
@@ -1009,6 +1018,37 @@ export async function runEditJob(ctx: Ctx) {
   }
 }
 
+/** Keeps a plan inside the owner's ticked effects (Claude is told, this makes sure). */
+function enforceEffects(plan: EditPlan, e?: Effects): EditPlan {
+  if (!e) return plan;
+  const zoomOk: Record<string, string> = { none: "still", in: "push", out: "push", punch: "punch", pan: "pan" };
+  const fallbackZoom = (["still", "push", "punch", "pan"] as const).find((m) => e.moves.includes(m));
+  const zoomOf: Record<string, EditPlan["segments"][number]["zoom"]> = { still: "none", push: "in", punch: "punch", pan: "pan" };
+  return {
+    ...plan,
+    titleStyle: plan.titleStyle === "none" || (e.titles as readonly string[]).includes(plan.titleStyle) ? plan.titleStyle : ((e.titles[0] as EditPlan["titleStyle"]) ?? "none"),
+    captionStyle: plan.captionStyle === "none" || (e.captions as readonly string[]).includes(plan.captionStyle) ? plan.captionStyle : ((e.captions[0] as EditPlan["captionStyle"]) ?? "none"),
+    look: (e.looks as readonly string[]).includes(plan.look) ? plan.look : ((e.looks[0] as EditPlan["look"]) ?? "natural"),
+    transition: plan.transition === "fade" && !e.transitions.includes("dissolve") ? "cut" : plan.transition === "cut" && !e.transitions.includes("cut") && !e.transitions.includes("beat") && e.transitions.includes("dissolve") ? "fade" : plan.transition,
+    segments: plan.segments.map((sg) => ((e.moves as readonly string[]).includes(zoomOk[sg.zoom] ?? "still") || !fallbackZoom ? sg : { ...sg, zoom: zoomOf[fallbackZoom] })),
+    storyLines: e.extras.includes("story") ? plan.storyLines : [],
+    overlays: e.extras.includes("cards") ? plan.overlays : [],
+  };
+}
+
+/** The opening title: small song card, poster card, or "MONTH recap" opener. */
+function titleCardFor(ctx: Ctx, req: EditSpec["request"], planTitle: string, chosen?: string): ClipEditProps["titleCard"] {
+  const style = (chosen ?? req.titleStyle ?? "card") as "card" | "poster" | "recap" | "pro" | "none";
+  if (style === "none" || style === "pro") return undefined;
+  const now = new Date();
+  const tz = ctx.settings.auto.timezone;
+  const month = new Intl.DateTimeFormat("en-US", { timeZone: tz, month: "long" }).format(now);
+  const year = new Intl.DateTimeFormat("en-US", { timeZone: tz, year: "numeric" }).format(now);
+  if (style === "poster") return { style, title: req.songTitle?.trim() || planTitle, header: req.eventName?.trim() || undefined, date: `${month} ${year}`, subtitle: req.singer?.trim() || undefined };
+  if (style === "recap") return { style, title: req.songTitle?.trim() || month, subtitle: "recap" };
+  return req.songTitle?.trim() ? { style: "card", title: req.songTitle.trim(), subtitle: req.singer?.trim() || undefined } : undefined;
+}
+
 /** Maps a time in a clip (seconds, clip time) to the output timeline (ms), or null if not shown. */
 function timeMapper(segments: Array<{ clip: number; start: number; end: number; rate: number; outStart: number }>, bed?: { clip: number; start: number }) {
   return (clip: number, t: number): number | null => {
@@ -1036,16 +1076,28 @@ function buildEditProps(ctx: Ctx, spec: EditSpec, clips: PreparedClip[], url: (f
   if (yt && !spec.layout && req.layout === "auto" && clips.some((c) => !c.onSet && !c.isImage && c.height > c.width * 1.1)) layout = "blur-pad";
   const gradeIndex = new Map<number, number>();
   const grades: NonNullable<ClipEditProps["grades"]> = [];
-  if (req.autoColor !== false) {
-    for (const g of plan.grades ?? []) {
-      if (gradeIndex.has(g.clip)) continue;
-      gradeIndex.set(g.clip, grades.length);
+  // The chosen look sits on top of each clip's correction.
+  const look = req.effects ? plan.look ?? "natural" : "natural";
+  const LOOK: Record<string, { exposure: number; contrast: number; highlights: number; saturation: number; warmth: number }> = {
+    natural: { exposure: 0, contrast: 0, highlights: 0, saturation: 0, warmth: 0 },
+    warm: { exposure: 0.05, contrast: -0.05, highlights: 0.2, saturation: 0.05, warmth: 0.28 },
+    cinematic: { exposure: -0.05, contrast: 0.25, highlights: 0.35, saturation: -0.08, warmth: 0.1 },
+    airy: { exposure: 0.2, contrast: -0.2, highlights: 0.35, saturation: -0.12, warmth: 0.05 },
+    mono: { exposure: 0, contrast: 0.2, highlights: 0.2, saturation: -1, warmth: 0 },
+  };
+  const lk = LOOK[look] ?? LOOK.natural;
+  const corrections = new Map((req.autoColor !== false ? plan.grades ?? [] : []).map((g) => [g.clip, g]));
+  if (req.autoColor !== false || look !== "natural") {
+    for (const c of clips) {
+      if (c.isImage) continue;
+      const g = corrections.get(c.index) ?? { exposure: 0, contrast: 0, highlights: 0, saturation: 0, warmth: 0 };
+      gradeIndex.set(c.index, grades.length);
       grades.push({
-        exposure: clamp(g.exposure, -1, 1),
-        contrast: clamp(g.contrast, -1, 1),
-        highlights: clamp(g.highlights, 0, 1),
-        saturation: clamp(g.saturation, -1, 1),
-        warmth: clamp(g.warmth, -1, 1),
+        exposure: clamp(g.exposure + lk.exposure, -1, 1),
+        contrast: clamp(g.contrast + lk.contrast, -1, 1),
+        highlights: clamp(g.highlights + lk.highlights, 0, 1),
+        saturation: look === "mono" ? -1 : clamp(g.saturation + lk.saturation, -1, 1),
+        warmth: clamp(g.warmth + lk.warmth, -1, 1),
       });
     }
   }
@@ -1130,7 +1182,9 @@ function buildEditProps(ctx: Ctx, spec: EditSpec, clips: PreparedClip[], url: (f
     }
   }
 
-  const choice = spec.captionChoice ?? req.captionChoice ?? { style: s.captions.onVideoStyle, look: s.captions.look };
+  const baseChoice = spec.captionChoice ?? req.captionChoice ?? { style: s.captions.onVideoStyle, look: s.captions.look };
+  // With ticked effects, Claude's pick decides the caption style (a revision's explicit choice still wins).
+  const choice = req.effects && !spec.captionChoice ? { ...baseChoice, style: plan.captionStyle ?? baseChoice.style } : baseChoice;
   const telugu = plan.captionLanguage === "telugu";
   const total = outMs / 1000;
   const overlays: NonNullable<ClipEditProps["overlays"]> = [];
@@ -1157,19 +1211,32 @@ function buildEditProps(ctx: Ctx, spec: EditSpec, clips: PreparedClip[], url: (f
     transition,
     captions: {
       words: showWords ? words : [],
-      style: lyrics.length ? "lyrics" : showWords ? (choice.style === "lyrics" ? "lines" : choice.style) : "none",
+      // Pasted lyrics use the lyric styles (window / typewriter / worship lyrics); speech uses the rest.
+      style: lyrics.length
+        ? choice.style === "window" || choice.style === "typewriter"
+          ? choice.style
+          : "lyrics"
+        : showWords
+          ? choice.style === "lyrics"
+            ? "lines"
+            : choice.style
+          : "none",
       language: telugu ? "telugu" : "english",
       emphasis: plan.emphasis ?? [],
       look: choice.look,
     },
     lyrics: lyrics.length && spec.showCaptions !== false ? lyrics : undefined,
-    titleCard: req.songTitle?.trim() ? { title: req.songTitle.trim(), subtitle: req.singer?.trim() || undefined } : undefined,
+    titleCard: titleCardFor(ctx, req, plan.title, req.effects ? plan.titleStyle : undefined),
+    story: (plan.storyLines ?? [])
+      .filter((l) => l.text.trim())
+      .map((l) => ({ text: l.text.trim(), startMs: clamp(l.at, 0, total) * 1000, endMs: clamp(l.at + clamp(l.duration, 1.5, 5), 0, total) * 1000 }))
+      .filter((l) => l.endMs > l.startMs + 800),
     grades,
     audioBed: bed ? { src: url(clips[bed.clip].file!), start: bed.start - clips[bed.clip].fileStart, fadeOutFrames: 24 } : undefined,
     overlays,
     sfx: undefined,
     cta: claudeLine ? plan.cta?.trim() || undefined : undefined,
-    hook: plan.hook.trim() || undefined,
+    hook: req.effects && plan.titleStyle !== "pro" ? undefined : plan.hook.trim() || undefined,
     brand,
     keepAudio: req.keepOriginalAudio && clips.some((c) => c.hasAudio),
     preset: "night",
@@ -1183,7 +1250,10 @@ async function renderEditSpec(ctx: Ctx, spec: EditSpec, clips: PreparedClip[], u
   const brand = await brandProps(ctx, url, spec.branding ?? spec.request.branding);
   const props = buildEditProps(ctx, spec, clips, url, brand);
   const songLike = spec.plan.style === "worship" || !!props.audioBed || (props.lyrics?.length ?? 0) > 0;
-  if (s.captions.soundEffects && spec.request.editStyle === "creator" && !songLike && spec.plan.style !== "sermon") {
+  const fx = spec.request.effects;
+  const wantSfx = fx ? fx.extras.includes("sfx") : s.captions.soundEffects && spec.request.editStyle === "creator";
+  if (fx && !fx.extras.includes("endcard")) brand.outro = { ...brand.outro, enabled: false };
+  if (wantSfx && !songLike && spec.plan.style !== "sermon") {
     const f = await makeSfx(sub("sfx"));
     const dir = path.join(ctx.work, "sfx");
     fs.mkdirSync(dir, { recursive: true });
@@ -1221,7 +1291,7 @@ async function renderEditSpec(ctx: Ctx, spec: EditSpec, clips: PreparedClip[], u
       );
       if (review.verdict === "fix") {
         log(`[${ctx.job.id}] quality check found: ${review.problems.join("; ")}`);
-        spec.plan = review.plan;
+        spec.plan = enforceEffects(review.plan, spec.request.effects);
         spec.showCaptions = spec.request.captions && review.plan.showCaptions;
         await materializeClips(ctx, clips, [review.plan], spec.request);
         const fixed = buildEditProps(ctx, spec, clips, url, brand);
@@ -1407,11 +1477,14 @@ export async function runReviseJob(ctx: Ctx) {
     });
     if (instruction) {
       await ctx.update({ stage: "Claude is re-watching the clips and applying your change", progress: 0.3 });
-      spec.plan = await ctx.ai.plan("revise", editRevisionPrompt(editPromptFor(ctx, spec.request, clips), spec.plan, instruction), EditPlan, {
-        cwd: ctx.work,
-        allowRead: true,
-        model: model(ctx),
-      });
+      spec.plan = enforceEffects(
+        await ctx.ai.plan("revise", editRevisionPrompt(editPromptFor(ctx, spec.request, clips), spec.plan, instruction), EditPlan, {
+          cwd: ctx.work,
+          allowRead: true,
+          model: model(ctx),
+        }),
+        spec.request.effects,
+      );
       spec.showCaptions = spec.request.captions && spec.plan.showCaptions;
     }
     if (ch.captionChoice) spec.captionChoice = ch.captionChoice;
